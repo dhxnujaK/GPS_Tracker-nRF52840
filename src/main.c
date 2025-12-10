@@ -75,8 +75,6 @@ static size_t token_buf_len;
 struct frag_state
 {
 	size_t expected_len;
-	size_t expected_frags;
-	size_t received_frags;
 	size_t buf_len;
 };
 static struct frag_state token_frag;
@@ -103,35 +101,6 @@ static const struct bt_data sd[] = {
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 	BT_DATA(BT_DATA_MANUFACTURER_DATA, mfg_data, sizeof(mfg_data)),
 };
-
-
-static const char *security_err_str(enum bt_security_err err)
-{
-	switch (err)
-	{
-	case BT_SECURITY_ERR_SUCCESS:
-		return "success";
-	case BT_SECURITY_ERR_AUTH_FAIL:
-		return "auth_fail";
-	case BT_SECURITY_ERR_PIN_OR_KEY_MISSING:
-		return "pin_or_key_missing";
-	case BT_SECURITY_ERR_OOB_NOT_AVAILABLE:
-		return "oob_not_available";
-	case BT_SECURITY_ERR_AUTH_REQUIREMENT:
-		return "auth_requirement";
-	case BT_SECURITY_ERR_PAIR_NOT_SUPPORTED:
-		return "pair_not_supported";
-	case BT_SECURITY_ERR_PAIR_NOT_ALLOWED:
-		return "pair_not_allowed";
-	case BT_SECURITY_ERR_INVALID_PARAM:
-		return "invalid_param";
-	case BT_SECURITY_ERR_KEY_REJECTED:
-		return "key_rejected";
-	case BT_SECURITY_ERR_UNSPECIFIED:
-	default:
-		return "unspecified";
-	}
-}
 
 static void reset_session(void)
 {
@@ -257,20 +226,28 @@ static int init_backend_public_key(void)
 						(const uint8_t *)BACKEND_PUBKEY_B64, strlen(BACKEND_PUBKEY_B64));
 	if (ret)
 	{
-		printk("Failed to decode backend public key (ret %d)\n", ret);
+		printk("Backend public key decode failed\n");
 		return ret;
 	}
 
 	ret = mbedtls_pk_parse_public_key(&backend_pk, der_buf, der_len);
 	if (ret)
 	{
-		printk("Failed to parse backend public key (ret %d)\n", ret);
+		printk("Backend public key parse failed\n");
 		mbedtls_pk_free(&backend_pk);
 		return -EINVAL;
 	}
 
 	backend_pk_ready = true;
 	return 0;
+}
+
+static void publish_token_result(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+								 const char *status)
+{
+	snprintk(last_token_status, sizeof(last_token_status),
+			 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"%s\"}", status);
+	notify_json(conn, attr, last_token_status, token_notify_enabled);
 }
 
 static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -289,64 +266,40 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	if (!json_extract_string(json, "payload", payload_b64, sizeof(payload_b64)) ||
 		!json_extract_string(json, "signature", signature_b64, sizeof(signature_b64)))
 	{
-		printk("Token write missing payload/signature\n");
-		snprintk(last_token_status, sizeof(last_token_status),
-				 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"ERROR\"}");
-		notify_json(conn, attr, last_token_status, token_notify_enabled);
+		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
-
-	printk("Token received (json len=%zu): payload_b64 len=%zu, sig_b64 len=%zu\n",
-		   len, strlen(payload_b64), strlen(signature_b64));
-	printk("Token payload_b64: %s\n", payload_b64);
-	printk("Token signature_b64: %s\n", signature_b64);
 
 	if (base64_decode_str(payload_b64, payload_buf, sizeof(payload_buf), &payload_len) ||
 		base64_decode_str(signature_b64, sig_buf, sizeof(sig_buf), &sig_len))
 	{
-		printk("Token base64 decode failed\n");
-		snprintk(last_token_status, sizeof(last_token_status),
-				 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"ERROR\"}");
-		notify_json(conn, attr, last_token_status, token_notify_enabled);
+		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
 	if (payload_len >= sizeof(payload_json))
 	{
-		printk("Token payload too long: %zu\n", payload_len);
-		snprintk(last_token_status, sizeof(last_token_status),
-				 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"ERROR\"}");
-		notify_json(conn, attr, last_token_status, token_notify_enabled);
+		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 	memcpy(payload_json, payload_buf, payload_len);
 	payload_json[payload_len] = '\0';
 
-	printk("Token payload JSON len=%zu: %s\n", payload_len, payload_json);
-
 	if (!json_extract_string(payload_json, "nodeId", node_id, sizeof(node_id)) ||
 		strcmp(node_id, NODE_ID_EXPECTED) != 0)
 	{
-		printk("Token nodeId mismatch or missing\n");
-		snprintk(last_token_status, sizeof(last_token_status),
-				 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"ERROR\"}");
-		notify_json(conn, attr, last_token_status, token_notify_enabled);
+		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))
 	{
-		printk("Token signature verification failed\n");
-		snprintk(last_token_status, sizeof(last_token_status),
-				 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"ERROR\"}");
-		notify_json(conn, attr, last_token_status, token_notify_enabled);
+		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
 	session.token_ok = true;
-	snprintk(last_token_status, sizeof(last_token_status),
-			 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"OK\"}");
-	notify_json(conn, attr, last_token_status, token_notify_enabled);
+	publish_token_result(conn, attr, "OK");
 	printk("Token validated for node %s\n", node_id);
 
 	if (!session.challenge_sent && challenge_attr)
@@ -354,7 +307,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 		int serr = send_nonce(conn, challenge_attr);
 		if (serr)
 		{
-			printk("Failed to send nonce: %d\n", serr);
+			printk("Nonce send failed\n");
 		}
 	}
 
@@ -444,7 +397,7 @@ static int send_nonce(struct bt_conn *conn, const struct bt_gatt_attr *attr)
 	snprintk(last_challenge, sizeof(last_challenge),
 			 "{\"nonceHex\":\"%s\"}", nonce_hex);
 	notify_json(conn, attr, last_challenge, challenge_notify_enabled);
-	printk("Challenge sent: %s\n", last_challenge);
+	printk("Challenge sent\n");
 	return 0;
 }
 
@@ -454,13 +407,9 @@ static ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
 	ARG_UNUSED(attr);
 
 	char json[1024];
-	bt_security_t sec = bt_conn_get_security(conn);
 
-	printk("token_write called, len=%u sec_level=%u\n", len, sec);
-
-	if (sec < BT_SECURITY_L2)
+	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
 	{
-		printk("token_write: security below L2, requesting upgrade\n");
 		/* Request encryption and ask the client to retry */
 		(void)bt_conn_set_security(conn, BT_SECURITY_L2);
 		return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
@@ -470,12 +419,10 @@ static ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
 	{
 		if (offset + len > sizeof(token_buf))
 		{
-			printk("token_write prepare overflow offset=%u len=%u\n", offset, len);
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
 		memcpy(token_buf + offset, buf, len);
 		token_buf_len = MAX(token_buf_len, offset + len);
-		printk("token_write prepare offset=%u len=%u total=%zu\n", offset, len, token_buf_len);
 		return len;
 	}
 
@@ -485,25 +432,21 @@ static ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
 		len = token_buf_len;
 		if (len == 0 || len >= sizeof(json))
 		{
-			printk("token_write execute invalid len=%u\n", len);
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
 		memcpy(json, token_buf, len);
 		json[len] = '\0';
-		printk("token_write execute total=%u\n", len);
 		token_buf_len = 0;
 	}
 	else
 	{
 		if (offset != 0)
 		{
-			printk("token_write with non-zero offset %u\n", offset);
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 		}
 
 		if (len >= sizeof(json))
 		{
-			printk("token_write too long: %u\n", len);
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
 		memcpy(json, buf, len);
@@ -518,72 +461,53 @@ static ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
 		if (strcmp(type, "FRAG_HDR") == 0)
 		{
 			uint32_t total_len = 0;
-			uint32_t frags = 0;
-			if (!json_extract_uint(json, "len", &total_len) ||
-				!json_extract_uint(json, "frags", &frags))
+			if (!json_extract_uint(json, "len", &total_len))
 			{
-				printk("FRAG_HDR missing len/frags\n");
 				return len;
 			}
-			if (total_len > sizeof(token_buf) || frags == 0)
+			if (total_len == 0 || total_len > sizeof(token_buf))
 			{
-				printk("FRAG_HDR invalid total_len=%u frags=%u\n", total_len, frags);
 				return len;
 			}
 			memset(&token_frag, 0, sizeof(token_frag));
 			token_frag.expected_len = total_len;
-			token_frag.expected_frags = frags;
 			token_frag.buf_len = 0;
 			token_buf_len = 0;
-			printk("FRAG_HDR len=%u frags=%u\n", total_len, frags);
 			return len;
 		}
 		else if (strcmp(type, "FRAG") == 0)
 		{
-			uint32_t seq = 0;
 			char data_b64[256];
-			if (!json_extract_uint(json, "seq", &seq) ||
-				!json_extract_string(json, "data", data_b64, sizeof(data_b64)))
+			if (!json_extract_string(json, "data", data_b64, sizeof(data_b64)))
 			{
-				printk("FRAG missing seq/data\n");
 				return len;
 			}
 			if (token_frag.expected_len == 0)
 			{
-				printk("FRAG received without header\n");
 				return len;
 			}
 			uint8_t chunk[256];
 			size_t chunk_len = 0;
 			if (base64_decode_str(data_b64, chunk, sizeof(chunk), &chunk_len))
 			{
-				printk("FRAG base64 decode failed\n");
 				return len;
 			}
 			if (token_frag.buf_len + chunk_len > sizeof(token_buf))
 			{
-				printk("FRAG overflow buf_len=%zu chunk=%zu\n", token_frag.buf_len, chunk_len);
 				return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 			}
 			memcpy(token_buf + token_frag.buf_len, chunk, chunk_len);
 			token_frag.buf_len += chunk_len;
-			token_frag.received_frags++;
-			printk("FRAG seq=%u chunk=%zu total=%zu/%zu\n", seq, chunk_len,
-				   token_frag.buf_len, token_frag.expected_len);
 
-			if ((token_frag.expected_frags &&
-				 token_frag.received_frags >= token_frag.expected_frags) ||
-				token_frag.buf_len >= token_frag.expected_len)
+			if (token_frag.buf_len >= token_frag.expected_len)
 			{
 				size_t total = token_frag.buf_len;
 				if (total >= sizeof(json))
 				{
-					printk("Assembled token too large: %zu\n", total);
 					return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 				}
 				memcpy(json, token_buf, total);
 				json[total] = '\0';
-				printk("FRAG complete total=%zu, processing token\n", total);
 				memset(&token_frag, 0, sizeof(token_frag));
 				token_buf_len = 0;
 				return process_token_json(conn, attr, json, total);
@@ -615,7 +539,6 @@ static ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *a
 
 	if (len >= sizeof(json))
 	{
-		printk("Response write too long: %u\n", len);
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 	memcpy(json, buf, len);
@@ -624,21 +547,18 @@ static ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *a
 	char mac_hex[80];
 	if (!json_extract_string(json, "macHex", mac_hex, sizeof(mac_hex)))
 	{
-		printk("Response missing macHex\n");
 		return len;
 	}
 
 	uint8_t mac_bytes[32];
 	if (!hex_to_bytes(mac_hex, mac_bytes, sizeof(mac_bytes)))
 	{
-		printk("Response macHex parse failed\n");
 		return len;
 	}
 
 	uint8_t expected_mac[32];
 	if (!session.challenge_sent)
 	{
-		printk("MAC received before challenge\n");
 		return len;
 	}
 
@@ -646,7 +566,6 @@ static ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *a
 							session.nonce, session.nonce_len,
 							expected_mac, sizeof(expected_mac)))
 	{
-		printk("HMAC compute failed\n");
 		return len;
 	}
 
@@ -745,14 +664,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	err = bt_conn_set_security(conn, BT_SECURITY_L2);
 	if (err)
 	{
-		if (err > 0)
-		{
-			printk("bt_conn_set_security failed, HCI status 0x%02x\n", err);
-		}
-		else
-		{
-			printk("bt_conn_set_security failed (err %d)\n", err);
-		}
+		printk("bt_conn_set_security failed (err %d)\n", err);
 	}
 }
 
@@ -822,8 +734,7 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	session.bonded = false;
-	printk("Pairing failed with %s (reason=%d:%s)\n", addr, reason,
-		   security_err_str(reason));
+	printk("Pairing failed with %s (reason=%d)\n", addr, reason);
 }
 
 static struct bt_conn_auth_info_cb auth_info_cb = {
@@ -838,8 +749,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	if (err)
 	{
-		printk("Security change failed with %s level %u (err %d:%s)\n", addr,
-			   level, err, security_err_str(err));
+		printk("Security change failed with %s level %u (err %d)\n", addr, level, err);
 	}
 	else
 	{
