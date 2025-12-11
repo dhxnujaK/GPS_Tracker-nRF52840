@@ -11,6 +11,10 @@ project(peripheral_lbs)
 # NORDIC SDK APP START
 target_sources(app PRIVATE
   src/main.c
+  src/app_utils.c
+  src/authorizationtoken.c
+  src/challengeresponse.c
+  src/BLECore.c
 )
 
 # NORDIC SDK APP END
