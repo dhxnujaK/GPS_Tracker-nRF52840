@@ -8,6 +8,7 @@
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/settings/settings.h>
 
 struct session_state session;
 struct bt_conn *current_conn;
@@ -159,5 +160,47 @@ int ble_core_init(void)
 		return err;
 	}
 
+	return 0;
+}
+
+int ble_core_start(const struct bt_data *ad, size_t ad_len,
+				   const struct bt_data *sd, size_t sd_len,
+				   bool load_settings)
+{
+	int err;
+
+	err = bt_enable(NULL);
+	if (err)
+	{
+		printk("Bluetooth init failed (err %d)\n", err);
+		return err;
+	}
+
+	printk("Bluetooth initialized\n");
+
+	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
+	{
+		settings_load();
+		printk("Settings loaded\n");
+	}
+
+	/* Clear existing bonds to avoid stale keys during development */
+	(void)ble_clear_bonds();
+
+	err = ble_core_init();
+	if (err)
+	{
+		printk("BLE core init failed (err %d)\n", err);
+		return err;
+	}
+
+	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ad_len, sd, sd_len);
+	if (err)
+	{
+		printk("Advertising failed to start (err %d)\n", err);
+		return err;
+	}
+
+	printk("Advertising started\n");
 	return 0;
 }

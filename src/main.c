@@ -8,7 +8,6 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <zephyr/settings/settings.h>
 
 #include "app_config.h"
 #include "authorizationtoken.h"
@@ -81,29 +80,11 @@ static int init_crypto_material(void)
 	return auth_init_backend_public_key();
 }
 
-int main(void)
+static int app_init(void)
 {
 	int err;
 
 	printk("Starting immobilizer commissioning app\n");
-
-	err = bt_enable(NULL);
-	if (err)
-	{
-		printk("Bluetooth init failed (err %d)\n", err);
-		return 0;
-	}
-
-	printk("Bluetooth initialized\n");
-
-	if (IS_ENABLED(CONFIG_SETTINGS))
-	{
-		settings_load();
-		printk("Settings loaded\n");
-	}
-
-	/* Clear existing bonds to avoid stale keys during development */
-	(void)ble_clear_bonds();
 
 	err = init_crypto_material();
 	if (err)
@@ -114,21 +95,21 @@ int main(void)
 
 	init_attr_refs();
 
-	err = ble_core_init();
+	err = ble_core_start(ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd), true);
 	if (err)
 	{
 		return 0;
 	}
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-	if (err)
+	return 0;
+}
+
+int main(void)
+{
+	if (app_init())
 	{
-		printk("Advertising failed to start (err %d)\n", err);
 		return 0;
 	}
-
-	printk("Advertising started\n");
-
 	for (;;)
 	{
 		k_sleep(K_SECONDS(1));
