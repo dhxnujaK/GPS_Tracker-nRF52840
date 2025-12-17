@@ -31,8 +31,9 @@ static struct bt_uuid_128 response_char_uuid = BT_UUID_INIT_128(BT_UUID_RESPONSE
 
 static const uint8_t mfg_data[] = {
 	COMPANY_ID & 0xFF, (COMPANY_ID >> 8) & 0xFF,
-	'I', 'M', 'M', 'O', '-', 'E', 'A', '9', 'F', '-', '6', '7', '4', '1'};
+	'K', 'E', 'Y', 'F', '-', '9', '3', '3', '8', '-', 'D', '6', '5', '5'};
 
+	
 /* Advertising data */
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
