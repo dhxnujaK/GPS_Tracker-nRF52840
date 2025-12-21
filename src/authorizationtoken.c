@@ -4,18 +4,9 @@
 #include "authorizationtoken.h"
 #include "challengeresponse.h"
 
-#include <errno.h>
 #include <string.h>
 #include <zephyr/sys/printk.h>
-#include <zephyr/sys/byteorder.h>
-#include <zephyr/sys/base64.h>
 #include <zephyr/sys/util.h>
-#include <mbedtls/md.h>
-#include <mbedtls/pk.h>
-#include <mbedtls/sha256.h>
-
-static mbedtls_pk_context backend_pk;
-static bool backend_pk_ready;
 
 static char last_token_status[96];
 static uint8_t token_notify_enabled;
@@ -31,129 +22,44 @@ struct frag_state
 
 static struct frag_state token_frag;
 
-static int verify_signature_es256(const uint8_t *payload, size_t payload_len,
-								  const uint8_t *sig_der, size_t sig_len)
-{
-	if (!backend_pk_ready)
-	{
-		return -EFAULT;
-	}
-
-	uint8_t hash[32];
-	int ret = mbedtls_sha256(payload, payload_len, hash, 0);
-	if (ret)
-	{
-		return -EINVAL;
-	}
-
-	ret = mbedtls_pk_verify(&backend_pk, MBEDTLS_MD_SHA256, hash, sizeof(hash),
-							sig_der, sig_len);
-	if (ret)
-	{
-		return -EACCES;
-	}
-
-	return 0;
-}
-
 static void publish_token_result(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 								 const char *status)
 {
 	snprintk(last_token_status, sizeof(last_token_status),
-			 "{\"type\":\"PAIR_TOKEN_RESULT\",\"status\":\"%s\"}", status);
+			 "{\"type\":\"LINK_MODE_RESULT\",\"status\":\"%s\"}", status);
 	notify_json(conn, attr, last_token_status, token_notify_enabled);
 }
 
 static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 								  const char *json, size_t len)
 {
-	/* Use static buffers to keep stack usage low */
-	static char payload_b64[512];
-	static char signature_b64[256];
-	static uint8_t payload_buf[512];
-	static uint8_t sig_buf[128];
-	static char payload_json[768];
-	char node_id[80];
-	size_t payload_len = 0;
-	size_t sig_len = 0;
+	char cmd[32];
+	char immobiliser_id[80];
 
-	if (!json_extract_string(json, "payload", payload_b64, sizeof(payload_b64)) ||
-		!json_extract_string(json, "signature", signature_b64, sizeof(signature_b64)))
+	if (!json_extract_string(json, "cmd", cmd, sizeof(cmd)))
 	{
 		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
-	if (base64_decode_str(payload_b64, payload_buf, sizeof(payload_buf), &payload_len) ||
-		base64_decode_str(signature_b64, sig_buf, sizeof(sig_buf), &sig_len))
+	if (strcmp(cmd, "ENTER_LINK_MODE") != 0)
 	{
 		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
-	if (payload_len >= sizeof(payload_json))
-	{
-		publish_token_result(conn, attr, "ERROR");
-		return len;
-	}
-	memcpy(payload_json, payload_buf, payload_len);
-	payload_json[payload_len] = '\0';
-
-	if (!json_extract_string(payload_json, "nodeId", node_id, sizeof(node_id)) ||
-		strcmp(node_id, NODE_ID_EXPECTED) != 0)
-	{
-		publish_token_result(conn, attr, "ERROR");
-		return len;
-	}
-
-	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))
+	if (!json_extract_string(json, "immobiliserId", immobiliser_id, sizeof(immobiliser_id)))
 	{
 		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
 	session.token_ok = true;
+	challenge_set_expected_immobiliser_id(immobiliser_id);
 	publish_token_result(conn, attr, "OK");
-	printk("Token validated for node %s\n", node_id);
-
-	if (!session.challenge_sent)
-	{
-		int serr = challenge_send_nonce(conn);
-		if (serr)
-		{
-			printk("Nonce send failed\n");
-		}
-	}
+	printk("Link mode enabled for immobiliser %s\n", immobiliser_id);
 
 	return len;
-}
-
-int auth_init_backend_public_key(void)
-{
-	uint8_t der_buf[200];
-	size_t der_len = 0;
-	int ret;
-
-	mbedtls_pk_init(&backend_pk);
-
-	ret = base64_decode(der_buf, sizeof(der_buf), &der_len,
-						(const uint8_t *)BACKEND_PUBKEY_B64, strlen(BACKEND_PUBKEY_B64));
-	if (ret)
-	{
-		printk("Backend public key decode failed\n");
-		return ret;
-	}
-
-	ret = mbedtls_pk_parse_public_key(&backend_pk, der_buf, der_len);
-	if (ret)
-	{
-		printk("Backend public key parse failed\n");
-		mbedtls_pk_free(&backend_pk);
-		return -EINVAL;
-	}
-
-	backend_pk_ready = true;
-	return 0;
 }
 
 ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,

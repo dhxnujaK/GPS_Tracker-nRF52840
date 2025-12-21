@@ -33,7 +33,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	/* Enable notifications by default so status/nonce messages are sent even if CCC isn't set. */
 	token_force_notify_enable();
-	challenge_force_notify_enable();
+	response_force_notify_enable();
 
 	printk("Connected, requesting security level 2 (LESC)\n");
 
@@ -47,14 +47,6 @@ static void connected(struct bt_conn *conn, uint8_t err)
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected (reason %u)\n", reason);
-	if (session.bonded && !session.trusted && conn)
-	{
-		char addr[BT_ADDR_LE_STR_LEN];
-		const bt_addr_le_t *dst = bt_conn_get_dst(conn);
-		bt_addr_le_to_str(dst, addr, sizeof(addr));
-		int uerr = bt_unpair(BT_ID_DEFAULT, dst);
-		printk("Unpaired %s on disconnect (challenge not validated) err=%d\n", addr, uerr);
-	}
 	if (current_conn)
 	{
 		bt_conn_unref(current_conn);
@@ -183,9 +175,6 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 		settings_load();
 		printk("Settings loaded\n");
 	}
-
-	/* Clear existing bonds to avoid stale keys during development */
-	(void)ble_clear_bonds();
 
 	err = ble_core_init();
 	if (err)
