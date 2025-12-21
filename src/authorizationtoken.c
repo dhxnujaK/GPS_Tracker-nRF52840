@@ -125,6 +125,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	if (json_extract_string(payload_json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
 	{
 		challenge_set_expected_keyfob_id(keyfob_id);
+		(void)ble_link_keyfob_start(keyfob_id);
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))

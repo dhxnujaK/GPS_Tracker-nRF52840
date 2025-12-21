@@ -16,7 +16,7 @@
 static uint8_t device_secret[32];
 static const struct bt_gatt_attr *challenge_attr;
 static uint8_t challenge_notify_enabled;
-static char last_challenge[96];
+static char last_challenge[160];
 static char linked_keyfob_id[80];
 static char expected_keyfob_id[80];
 
@@ -67,6 +67,18 @@ static int compute_hmac_sha256(const uint8_t *key, size_t key_len,
 
 	memcpy(out_mac, mac, sizeof(mac));
 	return 0;
+}
+
+void challenge_get_last_json(const char **json, size_t *len)
+{
+	if (json)
+	{
+		*json = last_challenge;
+	}
+	if (len)
+	{
+		*len = strlen(last_challenge);
+	}
 }
 
 int challenge_load_device_secret(void)
@@ -136,26 +148,12 @@ ssize_t challenge_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, resp, strlen(resp));
 }
 
-ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-					   const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+static int verify_response_json(struct bt_conn *notify_conn, const char *json)
 {
-	ARG_UNUSED(attr);
-	ARG_UNUSED(offset);
-	ARG_UNUSED(flags);
-
-	char json[160];
-
-	if (len >= sizeof(json))
-	{
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-	}
-	memcpy(json, buf, len);
-	json[len] = '\0';
-
 	char mac_hex[80];
 	if (!json_extract_string(json, "macHex", mac_hex, sizeof(mac_hex)))
 	{
-		return len;
+		return -EINVAL;
 	}
 
 	char keyfob_id[80] = {0};
@@ -165,27 +163,27 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	{
 		if (!has_keyfob_id || strcmp(keyfob_id, expected_keyfob_id) != 0)
 		{
-			return len;
+			return -EACCES;
 		}
 	}
 
 	uint8_t mac_bytes[32];
 	if (!hex_to_bytes(mac_hex, mac_bytes, sizeof(mac_bytes)))
 	{
-		return len;
+		return -EINVAL;
 	}
 
 	uint8_t expected_mac[32];
 	if (!session.challenge_sent)
 	{
-		return len;
+		return -EACCES;
 	}
 
 	if (compute_hmac_sha256(device_secret, sizeof(device_secret),
 							session.nonce, session.nonce_len,
 							expected_mac, sizeof(expected_mac)))
 	{
-		return len;
+		return -EINVAL;
 	}
 
 	if (memcmp(mac_bytes, expected_mac, sizeof(expected_mac)) == 0)
@@ -195,7 +193,7 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		snprintk(last_challenge, sizeof(last_challenge), "%s", ok);
 		if (challenge_attr)
 		{
-			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+			notify_json(notify_conn, challenge_attr, last_challenge, challenge_notify_enabled);
 		}
 		if (expected_keyfob_id[0] && has_keyfob_id)
 		{
@@ -206,10 +204,11 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 					 "{\"status\":\"LINK_OK\",\"keyfobNodeId\":\"%s\"}", linked_keyfob_id);
 			if (challenge_attr)
 			{
-				notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+				notify_json(notify_conn, challenge_attr, last_challenge, challenge_notify_enabled);
 			}
 		}
 		printk("Challenge response validated\n");
+		return 0;
 	}
 	else
 	{
@@ -217,7 +216,7 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		snprintk(last_challenge, sizeof(last_challenge), "%s", err);
 		if (challenge_attr)
 		{
-			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+			notify_json(notify_conn, challenge_attr, last_challenge, challenge_notify_enabled);
 		}
 		printk("Challenge response failed\n");
 		/* Drop bond if challenge failed */
@@ -232,6 +231,41 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		}
 	}
 
+	return -EACCES;
+}
+
+int challenge_process_response_json(struct bt_conn *notify_conn,
+									const char *json, size_t len)
+{
+	if (!json || len == 0)
+	{
+		return -EINVAL;
+	}
+
+	char tmp[160];
+	size_t copy_len = MIN(len, sizeof(tmp) - 1);
+	memcpy(tmp, json, copy_len);
+	tmp[copy_len] = '\0';
+
+	return verify_response_json(notify_conn, tmp);
+}
+
+ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+					   const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(attr);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+
+	if (len >= 160)
+	{
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	char json[160];
+	memcpy(json, buf, len);
+	json[len] = '\0';
+	(void)verify_response_json(conn, json);
 	return len;
 }
 

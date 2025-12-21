@@ -1,11 +1,15 @@
 #pragma once
 
+#include <stddef.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 
 int challenge_load_device_secret(void);
 int challenge_settings_init(void);
 int challenge_send_nonce(struct bt_conn *conn);
+void challenge_get_last_json(const char **json, size_t *len);
+int challenge_process_response_json(struct bt_conn *notify_conn,
+									const char *json, size_t len);
 ssize_t challenge_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 					   void *buf, uint16_t len, uint16_t offset);
 ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
