@@ -151,6 +151,14 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	session.token_ok = true;
 	publish_token_result(conn, attr, "PAIR_TOKEN_RESULT", "OK");
 	printk("Token validated for node %s\n", node_id);
+	if (!session.challenge_sent)
+	{
+		int serr = challenge_send_nonce(conn);
+		if (serr)
+		{
+			printk("Nonce send failed\n");
+		}
+	}
 
 	return len;
 }

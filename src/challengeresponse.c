@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <zephyr/random/random.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
@@ -14,6 +15,7 @@
 static uint8_t device_secret[32];
 static const struct bt_gatt_attr *challenge_attr;
 static const struct bt_gatt_attr *response_attr;
+static uint8_t challenge_notify_enabled;
 static uint8_t response_notify_enabled;
 static char last_challenge[96];
 static char last_response[160];
@@ -93,6 +95,37 @@ int challenge_settings_init(void)
 void challenge_set_attr(const struct bt_gatt_attr *attr)
 {
 	challenge_attr = attr;
+}
+
+int challenge_send_nonce(struct bt_conn *conn)
+{
+	if (!challenge_attr)
+	{
+		return -EINVAL;
+	}
+
+	uint8_t nonce[16];
+	int ret = sys_csrand_get(nonce, sizeof(nonce));
+	if (ret)
+	{
+		return -EIO;
+	}
+
+	memcpy(session.nonce, nonce, sizeof(nonce));
+	session.nonce_len = sizeof(nonce);
+	session.challenge_sent = true;
+
+	char nonce_hex[16 * 2 + 1];
+	for (size_t i = 0; i < sizeof(nonce); i++)
+	{
+		snprintf(&nonce_hex[i * 2], 3, "%02x", nonce[i]);
+	}
+
+	snprintk(last_challenge, sizeof(last_challenge),
+			 "{\"nonceHex\":\"%s\"}", nonce_hex);
+	notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+	printk("Challenge sent\n");
+	return 0;
 }
 
 void response_set_attr(const struct bt_gatt_attr *attr)
@@ -191,11 +224,87 @@ ssize_t challenge_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 							 last_challenge, strlen(last_challenge));
 }
 
+ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+					   const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	ARG_UNUSED(attr);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(flags);
+
+	char json[160];
+	if (len >= sizeof(json))
+	{
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+	memcpy(json, buf, len);
+	json[len] = '\0';
+
+	char mac_hex[80];
+	if (!json_extract_string(json, "macHex", mac_hex, sizeof(mac_hex)))
+	{
+		return len;
+	}
+
+	uint8_t mac_bytes[32];
+	if (!hex_to_bytes(mac_hex, mac_bytes, sizeof(mac_bytes)))
+	{
+		return len;
+	}
+
+	if (!session.challenge_sent)
+	{
+		return len;
+	}
+
+	uint8_t expected_mac[32];
+	if (compute_hmac_sha256(device_secret, sizeof(device_secret),
+							session.nonce, session.nonce_len,
+							expected_mac, sizeof(expected_mac)))
+	{
+		return len;
+	}
+
+	if (memcmp(mac_bytes, expected_mac, sizeof(expected_mac)) == 0)
+	{
+		session.trusted = true;
+		const char *ok = "{\"status\":\"AUTH_OK\"}";
+		snprintk(last_challenge, sizeof(last_challenge), "%s", ok);
+		if (challenge_attr)
+		{
+			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+		}
+		printk("Challenge response validated\n");
+	}
+	else
+	{
+		const char *err = "{\"status\":\"ERROR\"}";
+		snprintk(last_challenge, sizeof(last_challenge), "%s", err);
+		if (challenge_attr)
+		{
+			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+		}
+		printk("Challenge response failed\n");
+	}
+
+	return len;
+}
+
 ssize_t response_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 					  void *buf, uint16_t len, uint16_t offset)
 {
 	return bt_gatt_attr_read(conn, attr, buf, len, offset,
 							 last_response, strlen(last_response));
+}
+
+void challenge_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	ARG_UNUSED(attr);
+	challenge_notify_enabled = (value == BT_GATT_CCC_NOTIFY) ? BT_GATT_CCC_NOTIFY : 0;
+}
+
+void challenge_force_notify_enable(void)
+{
+	challenge_notify_enabled = BT_GATT_CCC_NOTIFY;
 }
 
 void response_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -214,4 +323,6 @@ void challenge_reset(void)
 	memset(last_challenge, 0, sizeof(last_challenge));
 	memset(last_response, 0, sizeof(last_response));
 	memset(expected_immobiliser_id, 0, sizeof(expected_immobiliser_id));
+	challenge_notify_enabled = 0;
+	response_notify_enabled = 0;
 }

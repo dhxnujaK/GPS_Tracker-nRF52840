@@ -55,21 +55,22 @@ BT_GATT_SERVICE_DEFINE(comm_svc,
 					   BT_GATT_CCC(token_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
 					   BT_GATT_CHARACTERISTIC(&challenge_char_uuid.uuid,
-											  BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+											  BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
 											  BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
 											  challenge_read, challenge_write, NULL),
+					   BT_GATT_CCC(challenge_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
 					   BT_GATT_CHARACTERISTIC(&response_char_uuid.uuid,
-											  BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-											  BT_GATT_PERM_READ,
-											  response_read, NULL, NULL),
+											  BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+											  BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+											  response_read, response_write, NULL),
 					   BT_GATT_CCC(response_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE));
 
 static void init_attr_refs(void)
 {
 	/* Challenge characteristic value attribute index within the service */
 	challenge_set_attr(&comm_svc.attrs[5]);
-	response_set_attr(&comm_svc.attrs[7]);
+	response_set_attr(&comm_svc.attrs[8]);
 }
 
 static int init_crypto_material(void)
