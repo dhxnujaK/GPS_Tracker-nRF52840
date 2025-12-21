@@ -79,7 +79,7 @@ static int init_crypto_material(void)
 		return -EINVAL;
 	}
 
-	return 0;
+	return auth_init_backend_public_key();
 }
 
 static int app_init(void)
