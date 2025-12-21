@@ -100,17 +100,31 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	memcpy(payload_json, payload_buf, payload_len);
 	payload_json[payload_len] = '\0';
 
-	if (!json_extract_string(payload_json, "immobiliserNodeId", immob_id, sizeof(immob_id)) ||
-		strcmp(immob_id, NODE_ID_EXPECTED) != 0)
+	if (json_extract_string(payload_json, "immobiliserNodeId", immob_id, sizeof(immob_id)))
+	{
+		if (strcmp(immob_id, NODE_ID_EXPECTED) != 0)
+		{
+			publish_token_result(conn, attr, "ERROR");
+			return len;
+		}
+	}
+	else if (json_extract_string(payload_json, "nodeId", immob_id, sizeof(immob_id)))
+	{
+		if (strcmp(immob_id, NODE_ID_EXPECTED) != 0)
+		{
+			publish_token_result(conn, attr, "ERROR");
+			return len;
+		}
+	}
+	else
 	{
 		publish_token_result(conn, attr, "ERROR");
 		return len;
 	}
 
-	if (!json_extract_string(payload_json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
+	if (json_extract_string(payload_json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
 	{
-		publish_token_result(conn, attr, "ERROR");
-		return len;
+		challenge_set_expected_keyfob_id(keyfob_id);
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))
@@ -121,7 +135,6 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 
 	session.token_ok = true;
 	publish_token_result(conn, attr, "OK");
-	challenge_set_expected_keyfob_id(keyfob_id);
 	printk("Token validated for immobiliser %s\n", immob_id);
 
 	if (!session.challenge_sent)
