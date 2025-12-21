@@ -158,14 +158,15 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		return len;
 	}
 
-	char keyfob_id[80];
-	if (!json_extract_string(json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
+	char keyfob_id[80] = {0};
+	bool has_keyfob_id = json_extract_string(json, "keyfobNodeId",
+											 keyfob_id, sizeof(keyfob_id));
+	if (expected_keyfob_id[0])
 	{
-		return len;
-	}
-	if (expected_keyfob_id[0] && strcmp(keyfob_id, expected_keyfob_id) != 0)
-	{
-		return len;
+		if (!has_keyfob_id || strcmp(keyfob_id, expected_keyfob_id) != 0)
+		{
+			return len;
+		}
 	}
 
 	uint8_t mac_bytes[32];
@@ -190,20 +191,23 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	if (memcmp(mac_bytes, expected_mac, sizeof(expected_mac)) == 0)
 	{
 		session.trusted = true;
-		strncpy(linked_keyfob_id, keyfob_id, sizeof(linked_keyfob_id));
-		linked_keyfob_id[sizeof(linked_keyfob_id) - 1] = '\0';
-		(void)save_linked_keyfob_id(linked_keyfob_id);
 		const char *ok = "{\"status\":\"AUTH_OK\"}";
 		snprintk(last_challenge, sizeof(last_challenge), "%s", ok);
 		if (challenge_attr)
 		{
 			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
 		}
-		snprintk(last_challenge, sizeof(last_challenge),
-				 "{\"status\":\"LINK_OK\",\"keyfobNodeId\":\"%s\"}", linked_keyfob_id);
-		if (challenge_attr)
+		if (expected_keyfob_id[0] && has_keyfob_id)
 		{
-			notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+			strncpy(linked_keyfob_id, keyfob_id, sizeof(linked_keyfob_id));
+			linked_keyfob_id[sizeof(linked_keyfob_id) - 1] = '\0';
+			(void)save_linked_keyfob_id(linked_keyfob_id);
+			snprintk(last_challenge, sizeof(last_challenge),
+					 "{\"status\":\"LINK_OK\",\"keyfobNodeId\":\"%s\"}", linked_keyfob_id);
+			if (challenge_attr)
+			{
+				notify_json(conn, challenge_attr, last_challenge, challenge_notify_enabled);
+			}
 		}
 		printk("Challenge response validated\n");
 	}
