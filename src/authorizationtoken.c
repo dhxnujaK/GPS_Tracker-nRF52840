@@ -73,7 +73,8 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	static uint8_t payload_buf[512];
 	static uint8_t sig_buf[128];
 	static char payload_json[768];
-	char node_id[80];
+	char immob_id[80];
+	char keyfob_id[80];
 	size_t payload_len = 0;
 	size_t sig_len = 0;
 
@@ -99,8 +100,14 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	memcpy(payload_json, payload_buf, payload_len);
 	payload_json[payload_len] = '\0';
 
-	if (!json_extract_string(payload_json, "nodeId", node_id, sizeof(node_id)) ||
-		strcmp(node_id, NODE_ID_EXPECTED) != 0)
+	if (!json_extract_string(payload_json, "immobiliserNodeId", immob_id, sizeof(immob_id)) ||
+		strcmp(immob_id, NODE_ID_EXPECTED) != 0)
+	{
+		publish_token_result(conn, attr, "ERROR");
+		return len;
+	}
+
+	if (!json_extract_string(payload_json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
 	{
 		publish_token_result(conn, attr, "ERROR");
 		return len;
@@ -114,7 +121,8 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 
 	session.token_ok = true;
 	publish_token_result(conn, attr, "OK");
-	printk("Token validated for node %s\n", node_id);
+	challenge_set_expected_keyfob_id(keyfob_id);
+	printk("Token validated for immobiliser %s\n", immob_id);
 
 	if (!session.challenge_sent)
 	{

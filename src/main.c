@@ -95,6 +95,13 @@ static int app_init(void)
 
 	init_attr_refs();
 
+	err = challenge_settings_init();
+	if (err)
+	{
+		printk("Settings handler init failed (err %d)\n", err);
+		return 0;
+	}
+
 	err = ble_core_start(ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd), true);
 	if (err)
 	{
