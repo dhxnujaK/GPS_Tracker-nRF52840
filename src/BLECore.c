@@ -177,6 +177,9 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 		printk("Settings loaded\n");
 	}
 
+	/* Clear existing bonds to avoid stale keys during development */
+	(void)ble_clear_bonds();
+
 	err = ble_core_init();
 	if (err)
 	{
