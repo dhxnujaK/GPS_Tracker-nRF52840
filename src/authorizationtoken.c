@@ -303,8 +303,10 @@ void token_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
 	ARG_UNUSED(attr);
 	token_notify_enabled = (value == BT_GATT_CCC_NOTIFY) ? BT_GATT_CCC_NOTIFY : 0;
+	printk("Token CCC changed: notify=%u\n", token_notify_enabled ? 1 : 0);
 	if (token_notify_enabled == BT_GATT_CCC_NOTIFY && secure_ready_pending && current_conn)
 	{
+		printk("Token CCC ready, sending SECURE_READY\n");
 		secure_ready_pending = false;
 		token_notify_secure_ready(current_conn);
 	}
@@ -333,9 +335,12 @@ void token_notify_secure_ready(struct bt_conn *conn)
 {
 	if (!token_attr || token_notify_enabled != BT_GATT_CCC_NOTIFY)
 	{
+		printk("SECURE_READY pending (attr=%p notify=%u)\n",
+			   token_attr, token_notify_enabled ? 1 : 0);
 		secure_ready_pending = true;
 		return;
 	}
+	printk("SECURE_READY notify sent\n");
 	snprintk(last_token_status, sizeof(last_token_status),
 			 "{\"type\":\"SECURE_READY\",\"status\":\"OK\"}");
 	notify_json(conn, token_attr, last_token_status, token_notify_enabled);
