@@ -69,6 +69,7 @@ BT_GATT_SERVICE_DEFINE(comm_svc,
 static void init_attr_refs(void)
 {
 	/* Challenge characteristic value attribute index within the service */
+	token_set_attr(&comm_svc.attrs[2]);
 	challenge_set_attr(&comm_svc.attrs[5]);
 	response_set_attr(&comm_svc.attrs[8]);
 }

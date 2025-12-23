@@ -8,10 +8,21 @@
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
 
 struct session_state session;
 struct bt_conn *current_conn;
+static struct k_work_delayable secure_ready_work;
+
+static void secure_ready_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (current_conn)
+	{
+		token_notify_secure_ready(current_conn);
+	}
+}
 
 static void reset_session(void)
 {
@@ -68,6 +79,10 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 	else
 	{
 		printk("Security changed with %s level %u\n", addr, level);
+		if (level >= BT_SECURITY_L2)
+		{
+			(void)k_work_schedule(&secure_ready_work, K_MSEC(200));
+		}
 	}
 }
 
@@ -170,6 +185,7 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	}
 
 	printk("Bluetooth initialized\n");
+	k_work_init_delayable(&secure_ready_work, secure_ready_work_handler);
 
 	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
 	{
