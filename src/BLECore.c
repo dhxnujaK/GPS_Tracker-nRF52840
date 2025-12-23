@@ -325,9 +325,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	current_conn = bt_conn_ref(conn);
 	reset_session();
 
-	/* Enable notifications by default so status/nonce messages are sent even if CCC isn't set. */
-	token_force_notify_enable();
-	challenge_force_notify_enable();
+	/* Wait for CCC subscription before notifying. */
 
 	printk("Connected, requesting security level 2 (LESC)\n");
 
