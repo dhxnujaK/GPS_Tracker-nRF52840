@@ -9,6 +9,7 @@
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
 
 struct session_state session;
@@ -34,6 +35,53 @@ static struct bt_gatt_subscribe_params subscribe_params;
 static struct bt_uuid_128 keyfob_comm_uuid = BT_UUID_INIT_128(BT_UUID_COMM_SVC_VAL);
 static struct bt_uuid_128 keyfob_challenge_uuid = BT_UUID_INIT_128(BT_UUID_CHALLENGE_CHAR_VAL);
 static struct bt_uuid_128 keyfob_response_uuid = BT_UUID_INIT_128(BT_UUID_RESPONSE_CHAR_VAL);
+
+static const struct bt_data *adv_ad;
+static const struct bt_data *adv_sd;
+static size_t adv_ad_len;
+static size_t adv_sd_len;
+static bool adv_running;
+static bool adv_paused_for_scan;
+static bool keyfob_scan_pending;
+static bool keyfob_scanning;
+static struct k_work_delayable secure_ready_work;
+
+static void secure_ready_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (current_conn)
+	{
+		token_notify_secure_ready(current_conn);
+	}
+}
+
+static int adv_start(void)
+{
+	if (!adv_ad || !adv_sd)
+	{
+		return -EINVAL;
+	}
+
+	int err = bt_le_adv_start(BT_LE_ADV_CONN, adv_ad, adv_ad_len, adv_sd, adv_sd_len);
+	if (!err)
+	{
+		adv_running = true;
+	}
+	return err;
+}
+
+static void adv_stop(void)
+{
+	if (!adv_running)
+	{
+		return;
+	}
+
+	if (bt_le_adv_stop() == 0)
+	{
+		adv_running = false;
+	}
+}
 
 static void keyfob_reset_discovery(void)
 {
@@ -244,6 +292,7 @@ static void scan_recv_legacy(const bt_addr_le_t *addr, int8_t rssi,
 	}
 
 	bt_le_scan_stop();
+	keyfob_scanning = false;
 	bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
 					  BT_LE_CONN_PARAM_DEFAULT, &keyfob_conn);
 }
@@ -302,6 +351,15 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 			keyfob_conn = NULL;
 		}
 		keyfob_reset_discovery();
+		keyfob_scanning = false;
+		if (adv_paused_for_scan)
+		{
+			adv_paused_for_scan = false;
+			if (adv_start() == 0)
+			{
+				printk("Advertising restarted\n");
+			}
+		}
 		return;
 	}
 	if (current_conn)
@@ -310,6 +368,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		current_conn = NULL;
 	}
 	reset_session();
+	if (keyfob_scan_pending)
+	{
+		keyfob_scan_pending = false;
+		(void)ble_link_keyfob_start(keyfob_target_id);
+	}
 }
 
 static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
@@ -330,7 +393,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 			if (bt_conn_get_info(conn, &info) == 0 &&
 				info.role == BT_CONN_ROLE_PERIPHERAL)
 			{
-				token_notify_secure_ready(conn);
+				(void)k_work_schedule(&secure_ready_work, K_MSEC(200));
 			}
 		}
 	}
@@ -435,6 +498,11 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	}
 
 	printk("Bluetooth initialized\n");
+	adv_ad = ad;
+	adv_sd = sd;
+	adv_ad_len = ad_len;
+	adv_sd_len = sd_len;
+	k_work_init_delayable(&secure_ready_work, secure_ready_work_handler);
 
 	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
 	{
@@ -452,7 +520,7 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 		return err;
 	}
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ad_len, sd, sd_len);
+	err = adv_start();
 	if (err)
 	{
 		printk("Advertising failed to start (err %d)\n", err);
@@ -473,10 +541,29 @@ int ble_link_keyfob_start(const char *keyfob_id)
 	strncpy(keyfob_target_id, keyfob_id, sizeof(keyfob_target_id));
 	keyfob_target_id[sizeof(keyfob_target_id) - 1] = '\0';
 
+	printk("Keyfob scan requested (connected=%s scanning=%s)\n",
+		   current_conn ? "yes" : "no",
+		   keyfob_scanning ? "yes" : "no");
+
 	if (keyfob_conn)
 	{
 		return -EALREADY;
 	}
+
+	if (keyfob_scanning)
+	{
+		return -EALREADY;
+	}
+
+	if (current_conn)
+	{
+		keyfob_scan_pending = true;
+		return 0;
+	}
+
+	(void)bt_le_scan_stop();
+	adv_stop();
+	adv_paused_for_scan = true;
 
 	struct bt_le_scan_param scan_param = {
 		.type = BT_HCI_LE_SCAN_ACTIVE,
@@ -485,5 +572,18 @@ int ble_link_keyfob_start(const char *keyfob_id)
 		.window = 0x0010,
 	};
 
-	return bt_le_scan_start(&scan_param, scan_recv_legacy);
+	int err = bt_le_scan_start(&scan_param, scan_recv_legacy);
+	if (err)
+	{
+		printk("Keyfob scan start failed (err %d)\n", err);
+		adv_paused_for_scan = false;
+		(void)adv_start();
+		keyfob_scanning = false;
+	}
+	else
+	{
+		keyfob_scanning = true;
+		printk("Keyfob scan started\n");
+	}
+	return err;
 }
