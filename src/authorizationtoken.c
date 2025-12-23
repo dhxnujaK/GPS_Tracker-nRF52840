@@ -124,7 +124,9 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 		return len;
 	}
 
-	if (json_extract_string(payload_json, "keyfobNodeId", keyfob_id, sizeof(keyfob_id)))
+	bool has_keyfob_id = json_extract_string(payload_json, "keyfobNodeId",
+											 keyfob_id, sizeof(keyfob_id));
+	if (has_keyfob_id)
 	{
 		challenge_set_expected_keyfob_id(keyfob_id);
 		(void)ble_link_keyfob_start(keyfob_id);
@@ -140,7 +142,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	publish_token_result(conn, attr, "OK");
 	printk("Token validated for immobiliser %s\n", immob_id);
 
-	if (!session.challenge_sent)
+	if (!has_keyfob_id && !session.challenge_sent)
 	{
 		int serr = challenge_send_nonce(conn);
 		if (serr)
