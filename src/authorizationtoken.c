@@ -66,9 +66,37 @@ static void publish_token_result(struct bt_conn *conn, const struct bt_gatt_attr
 	notify_json(conn, attr, last_token_status, token_notify_enabled);
 }
 
+static void publish_scan_result(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+								const char *status)
+{
+	snprintk(last_token_status, sizeof(last_token_status),
+			 "{\"type\":\"KEYFOB_SCAN_RESULT\",\"status\":\"%s\"}", status);
+	notify_json(conn, attr, last_token_status, token_notify_enabled);
+}
+
 static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 								  const char *json, size_t len)
 {
+	char cmd[32];
+	char cmd_keyfob_id[80];
+
+	if (json_extract_string(json, "cmd", cmd, sizeof(cmd)))
+	{
+		if (strcmp(cmd, "START_KEYFOB_SCAN") == 0)
+		{
+			if (json_extract_string(json, "keyfobNodeId",
+									cmd_keyfob_id, sizeof(cmd_keyfob_id)))
+			{
+				challenge_set_expected_keyfob_id(cmd_keyfob_id);
+				(void)ble_link_keyfob_start(cmd_keyfob_id);
+				publish_scan_result(conn, attr, "OK");
+				return len;
+			}
+			publish_scan_result(conn, attr, "ERROR");
+			return len;
+		}
+	}
+
 	/* Use static buffers to keep stack usage low */
 	static char payload_b64[512];
 	static char signature_b64[256];
@@ -129,7 +157,6 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	if (has_keyfob_id)
 	{
 		challenge_set_expected_keyfob_id(keyfob_id);
-		(void)ble_link_keyfob_start(keyfob_id);
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))
