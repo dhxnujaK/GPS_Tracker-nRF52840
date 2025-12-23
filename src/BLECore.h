@@ -24,3 +24,4 @@ int ble_core_init(void);
 int ble_core_start(const struct bt_data *ad, size_t ad_len,
 				   const struct bt_data *sd, size_t sd_len,
 				   bool load_settings);
+int ble_adv_restart(void);

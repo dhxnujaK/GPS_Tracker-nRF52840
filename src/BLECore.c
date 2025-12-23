@@ -2,6 +2,7 @@
 #include "authorizationtoken.h"
 #include "challengeresponse.h"
 
+#include <errno.h>
 #include <string.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -13,6 +14,11 @@
 
 struct session_state session;
 struct bt_conn *current_conn;
+static const struct bt_data *adv_ad;
+static const struct bt_data *adv_sd;
+static size_t adv_ad_len;
+static size_t adv_sd_len;
+static bool adv_running;
 static struct k_work_delayable secure_ready_work;
 
 static void secure_ready_work_handler(struct k_work *work)
@@ -41,6 +47,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	current_conn = bt_conn_ref(conn);
 	reset_session();
+	adv_running = false;
 
 	/* Wait for CCC subscription before notifying. */
 
@@ -62,6 +69,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		current_conn = NULL;
 	}
 	reset_session();
+	(void)ble_adv_restart();
 }
 
 static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
@@ -182,6 +190,10 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	}
 
 	printk("Bluetooth initialized\n");
+	adv_ad = ad;
+	adv_sd = sd;
+	adv_ad_len = ad_len;
+	adv_sd_len = sd_len;
 	k_work_init_delayable(&secure_ready_work, secure_ready_work_handler);
 
 	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
@@ -208,5 +220,25 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	}
 
 	printk("Advertising started\n");
+	adv_running = true;
 	return 0;
+}
+
+int ble_adv_restart(void)
+{
+	if (!adv_ad || !adv_sd)
+	{
+		return -EINVAL;
+	}
+	if (adv_running)
+	{
+		return 0;
+	}
+
+	int err = bt_le_adv_start(BT_LE_ADV_CONN, adv_ad, adv_ad_len, adv_sd, adv_sd_len);
+	if (!err)
+	{
+		adv_running = true;
+	}
+	return err;
 }

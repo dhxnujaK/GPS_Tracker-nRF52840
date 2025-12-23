@@ -95,6 +95,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 
 		session.token_ok = true;
 		challenge_set_expected_immobiliser_id(immobiliser_id);
+		(void)ble_adv_restart();
 		publish_token_result(conn, attr, "LINK_MODE_RESULT", "OK");
 		printk("Link mode enabled for immobiliser %s\n", immobiliser_id);
 		return len;
