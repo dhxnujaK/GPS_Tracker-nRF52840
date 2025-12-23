@@ -20,6 +20,7 @@ static bool backend_pk_ready;
 static char last_token_status[96];
 static uint8_t token_notify_enabled;
 static const struct bt_gatt_attr *token_attr;
+static bool secure_ready_pending;
 
 static uint8_t token_buf[1024];
 static size_t token_buf_len;
@@ -302,6 +303,11 @@ void token_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
 	ARG_UNUSED(attr);
 	token_notify_enabled = (value == BT_GATT_CCC_NOTIFY) ? BT_GATT_CCC_NOTIFY : 0;
+	if (token_notify_enabled == BT_GATT_CCC_NOTIFY && secure_ready_pending && current_conn)
+	{
+		secure_ready_pending = false;
+		token_notify_secure_ready(current_conn);
+	}
 }
 
 void token_force_notify_enable(void)
@@ -315,6 +321,7 @@ void token_reset(void)
 	memset(&token_frag, 0, sizeof(token_frag));
 	token_notify_enabled = 0;
 	token_buf_len = 0;
+	secure_ready_pending = false;
 }
 
 void token_set_attr(const struct bt_gatt_attr *attr)
@@ -324,8 +331,9 @@ void token_set_attr(const struct bt_gatt_attr *attr)
 
 void token_notify_secure_ready(struct bt_conn *conn)
 {
-	if (!token_attr)
+	if (!token_attr || token_notify_enabled != BT_GATT_CCC_NOTIFY)
 	{
+		secure_ready_pending = true;
 		return;
 	}
 	snprintk(last_token_status, sizeof(last_token_status),
