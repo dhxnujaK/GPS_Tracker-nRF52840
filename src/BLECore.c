@@ -324,6 +324,15 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 	else
 	{
 		printk("Security changed with %s level %u\n", addr, level);
+		if (level >= BT_SECURITY_L2)
+		{
+			struct bt_conn_info info;
+			if (bt_conn_get_info(conn, &info) == 0 &&
+				info.role == BT_CONN_ROLE_PERIPHERAL)
+			{
+				token_notify_secure_ready(conn);
+			}
+		}
 	}
 }
 

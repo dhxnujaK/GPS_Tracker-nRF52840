@@ -19,6 +19,7 @@ static bool backend_pk_ready;
 
 static char last_token_status[96];
 static uint8_t token_notify_enabled;
+static const struct bt_gatt_attr *token_attr;
 
 static uint8_t token_buf[1024];
 static size_t token_buf_len;
@@ -314,4 +315,20 @@ void token_reset(void)
 	memset(&token_frag, 0, sizeof(token_frag));
 	token_notify_enabled = 0;
 	token_buf_len = 0;
+}
+
+void token_set_attr(const struct bt_gatt_attr *attr)
+{
+	token_attr = attr;
+}
+
+void token_notify_secure_ready(struct bt_conn *conn)
+{
+	if (!token_attr)
+	{
+		return;
+	}
+	snprintk(last_token_status, sizeof(last_token_status),
+			 "{\"type\":\"SECURE_READY\",\"status\":\"OK\"}");
+	notify_json(conn, token_attr, last_token_status, token_notify_enabled);
 }

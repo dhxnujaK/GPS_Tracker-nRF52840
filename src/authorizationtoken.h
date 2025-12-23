@@ -9,3 +9,5 @@ ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 void token_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value);
 void token_force_notify_enable(void);
 void token_reset(void);
+void token_set_attr(const struct bt_gatt_attr *attr);
+void token_notify_secure_ready(struct bt_conn *conn);
