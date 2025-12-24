@@ -105,6 +105,7 @@ static uint8_t keyfob_notify_cb(struct bt_conn *conn,
 		return BT_GATT_ITER_CONTINUE;
 	}
 
+	printk("Keyfob response notify received (%u bytes)\n", length);
 	(void)challenge_process_response_json(current_conn, data, length);
 	return BT_GATT_ITER_CONTINUE;
 }
@@ -131,6 +132,7 @@ static void keyfob_send_nonce(void)
 
 	(void)bt_gatt_write_without_response(keyfob_conn, keyfob_challenge_handle,
 										 json, json_len, false);
+	printk("Keyfob nonce sent\n");
 }
 
 static uint8_t keyfob_discover_cb(struct bt_conn *conn,
@@ -187,6 +189,7 @@ static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 		subscribe_params.value_handle = keyfob_response_handle;
 		subscribe_params.ccc_handle = keyfob_response_ccc_handle;
 		bt_gatt_subscribe(conn, &subscribe_params);
+		printk("Keyfob response subscribed\n");
 		keyfob_send_nonce();
 		return BT_GATT_ITER_STOP;
 	}
@@ -197,6 +200,7 @@ static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 static void keyfob_start_discovery(struct bt_conn *conn)
 {
 	keyfob_reset_discovery();
+	printk("Keyfob discovery started\n");
 	discover_params.uuid = &keyfob_comm_uuid.uuid;
 	discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
 	discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -293,6 +297,7 @@ static void scan_recv_legacy(const bt_addr_le_t *addr, int8_t rssi,
 
 	bt_le_scan_stop();
 	keyfob_scanning = false;
+	printk("Keyfob advertisement matched, connecting\n");
 	bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
 					  BT_LE_CONN_PARAM_DEFAULT, &keyfob_conn);
 }
@@ -316,8 +321,12 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	if (bt_conn_get_info(conn, &info) == 0 &&
 		info.role == BT_CONN_ROLE_CENTRAL)
 	{
+		printk("Keyfob connected\n");
 		keyfob_conn = bt_conn_ref(conn);
-		(void)bt_conn_set_security(conn, BT_SECURITY_L2);
+		if (bt_conn_set_security(conn, BT_SECURITY_L2))
+		{
+			printk("Keyfob security request failed\n");
+		}
 		keyfob_start_discovery(conn);
 		return;
 	}
@@ -388,10 +397,16 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 		if (level >= BT_SECURITY_L2)
 		{
 			struct bt_conn_info info;
-			if (bt_conn_get_info(conn, &info) == 0 &&
-				info.role == BT_CONN_ROLE_PERIPHERAL)
+			if (bt_conn_get_info(conn, &info) == 0)
 			{
-				(void)k_work_schedule(&secure_ready_work, K_MSEC(200));
+				if (info.role == BT_CONN_ROLE_PERIPHERAL)
+				{
+					(void)k_work_schedule(&secure_ready_work, K_MSEC(200));
+				}
+				else
+				{
+					printk("Keyfob security level %u\n", level);
+				}
 			}
 		}
 	}
@@ -542,6 +557,7 @@ int ble_link_keyfob_start(const char *keyfob_id)
 	printk("Keyfob scan requested (connected=%s scanning=%s)\n",
 		   current_conn ? "yes" : "no",
 		   keyfob_scanning ? "yes" : "no");
+	printk("Keyfob target id: %s\n", keyfob_target_id);
 
 	if (keyfob_conn)
 	{
