@@ -21,4 +21,6 @@ void response_force_notify_enable(void);
 void challenge_set_attr(const struct bt_gatt_attr *attr);
 void response_set_attr(const struct bt_gatt_attr *attr);
 void challenge_reset(void);
+void challenge_reset_preserve_expected(void);
+bool challenge_link_mode_active(void);
 void challenge_set_expected_immobiliser_id(const char *id);

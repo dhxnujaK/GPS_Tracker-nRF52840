@@ -139,6 +139,11 @@ void challenge_set_expected_immobiliser_id(const char *id)
 	expected_immobiliser_id[sizeof(expected_immobiliser_id) - 1] = '\0';
 }
 
+bool challenge_link_mode_active(void)
+{
+	return expected_immobiliser_id[0] != '\0';
+}
+
 static void format_hex(const uint8_t *in, size_t len, char *out, size_t out_len)
 {
 	if (out_len < (len * 2 + 1))
@@ -323,6 +328,14 @@ void challenge_reset(void)
 	memset(last_challenge, 0, sizeof(last_challenge));
 	memset(last_response, 0, sizeof(last_response));
 	memset(expected_immobiliser_id, 0, sizeof(expected_immobiliser_id));
+	challenge_notify_enabled = 0;
+	response_notify_enabled = 0;
+}
+
+void challenge_reset_preserve_expected(void)
+{
+	memset(last_challenge, 0, sizeof(last_challenge));
+	memset(last_response, 0, sizeof(last_response));
 	challenge_notify_enabled = 0;
 	response_notify_enabled = 0;
 }

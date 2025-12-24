@@ -34,7 +34,14 @@ static void reset_session(void)
 {
 	memset(&session, 0, sizeof(session));
 	token_reset();
-	challenge_reset();
+	if (challenge_link_mode_active())
+	{
+		challenge_reset_preserve_expected();
+	}
+	else
+	{
+		challenge_reset();
+	}
 }
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -52,6 +59,11 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	/* Wait for CCC subscription before notifying. */
 
 	printk("Connected, requesting security level 2 (LESC)\n");
+	if (challenge_link_mode_active())
+	{
+		printk("Link mode active, deferring security to central\n");
+		return;
+	}
 	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
 	{
 		int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
