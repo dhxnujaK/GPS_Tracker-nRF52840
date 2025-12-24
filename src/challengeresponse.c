@@ -21,6 +21,8 @@ static char last_challenge[96];
 static char last_response[160];
 static char linked_immobiliser_id[80];
 static char expected_immobiliser_id[80];
+static uint8_t link_key[32];
+static bool link_key_set;
 
 static int settings_set(const char *name, size_t len,
 						settings_read_cb read_cb, void *cb_arg)
@@ -68,6 +70,22 @@ static int compute_hmac_sha256(const uint8_t *key, size_t key_len,
 	}
 
 	memcpy(out_mac, mac, sizeof(mac));
+	return 0;
+}
+
+int challenge_set_link_key_hex(const char *hex)
+{
+	if (!hex || !hex[0])
+	{
+		return -EINVAL;
+	}
+
+	if (!hex_to_bytes(hex, link_key, sizeof(link_key)))
+	{
+		return -EINVAL;
+	}
+
+	link_key_set = true;
 	return 0;
 }
 
@@ -157,6 +175,11 @@ static void format_hex(const uint8_t *in, size_t len, char *out, size_t out_len)
 	}
 }
 
+static void format_hex32(const uint8_t *in, char *out, size_t out_len)
+{
+	format_hex(in, 32, out, out_len);
+}
+
 ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 						const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -191,12 +214,25 @@ ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	}
 
 	uint8_t mac[32];
-	if (compute_hmac_sha256(device_secret, sizeof(device_secret),
+	const uint8_t *key = device_secret;
+	size_t key_len = sizeof(device_secret);
+	if (expected_immobiliser_id[0] && link_key_set)
+	{
+		key = link_key;
+		key_len = sizeof(link_key);
+	}
+
+	if (compute_hmac_sha256(key, key_len,
 							nonce, sizeof(nonce),
 							mac, sizeof(mac)))
 	{
 		return len;
 	}
+
+	char mac_hex_dbg[65];
+	memset(mac_hex_dbg, 0, sizeof(mac_hex_dbg));
+	format_hex32(mac, mac_hex_dbg, sizeof(mac_hex_dbg));
+	printk("Link HMAC (keyfob): %s\n", mac_hex_dbg);
 
 	char mac_hex[65];
 	memset(mac_hex, 0, sizeof(mac_hex));
@@ -330,6 +366,8 @@ void challenge_reset(void)
 	memset(expected_immobiliser_id, 0, sizeof(expected_immobiliser_id));
 	challenge_notify_enabled = 0;
 	response_notify_enabled = 0;
+	memset(link_key, 0, sizeof(link_key));
+	link_key_set = false;
 }
 
 void challenge_reset_preserve_expected(void)
@@ -338,4 +376,6 @@ void challenge_reset_preserve_expected(void)
 	memset(last_response, 0, sizeof(last_response));
 	challenge_notify_enabled = 0;
 	response_notify_enabled = 0;
+	memset(link_key, 0, sizeof(link_key));
+	link_key_set = false;
 }

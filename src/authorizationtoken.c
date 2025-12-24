@@ -70,6 +70,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 {
 	char cmd[32];
 	char immobiliser_id[80];
+	char link_key_hex[80];
 	static char payload_b64[512];
 	static char signature_b64[256];
 	static uint8_t payload_buf[512];
@@ -92,6 +93,14 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 			publish_token_result(conn, attr, "LINK_MODE_RESULT", "ERROR");
 			return len;
 		}
+
+		if (!json_extract_string(json, "linkKeyHex", link_key_hex, sizeof(link_key_hex)) ||
+			challenge_set_link_key_hex(link_key_hex))
+		{
+			publish_token_result(conn, attr, "LINK_MODE_RESULT", "ERROR");
+			return len;
+		}
+		printk("Link key received: %s\n", link_key_hex);
 
 		session.token_ok = true;
 		challenge_set_expected_immobiliser_id(immobiliser_id);
