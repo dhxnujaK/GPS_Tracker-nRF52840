@@ -24,3 +24,4 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 				   const struct bt_data *sd, size_t sd_len,
 				   bool load_settings);
 int ble_link_keyfob_start(const char *keyfob_id);
+void ble_keyfob_bond_phase_start(void);
