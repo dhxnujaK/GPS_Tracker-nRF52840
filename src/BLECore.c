@@ -113,6 +113,8 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn,
 	printk("Pairing accept from %s io_cap=%u oob=%u auth_req=0x%02x key_size=%u\n",
 		   addr, feat->io_capability, feat->oob_data_flag, feat->auth_req,
 		   feat->max_enc_key_size);
+	printk("Pairing keys init=0x%02x resp=0x%02x\n",
+		   feat->init_key_dist, feat->resp_key_dist);
 	return BT_SECURITY_ERR_SUCCESS;
 }
 
