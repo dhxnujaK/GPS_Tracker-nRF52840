@@ -180,6 +180,11 @@ static void format_hex32(const uint8_t *in, char *out, size_t out_len)
 	format_hex(in, 32, out, out_len);
 }
 
+static void format_hex16(const uint8_t *in, char *out, size_t out_len)
+{
+	format_hex(in, 16, out, out_len);
+}
+
 ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 						const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -233,6 +238,16 @@ ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	memset(mac_hex_dbg, 0, sizeof(mac_hex_dbg));
 	format_hex32(mac, mac_hex_dbg, sizeof(mac_hex_dbg));
 	printk("Link HMAC (keyfob): %s\n", mac_hex_dbg);
+
+	char key_hex_dbg[65];
+	memset(key_hex_dbg, 0, sizeof(key_hex_dbg));
+	format_hex32(key, key_hex_dbg, sizeof(key_hex_dbg));
+	printk("Link key used (keyfob): %s\n", key_hex_dbg);
+
+	char nonce_hex_dbg[33];
+	memset(nonce_hex_dbg, 0, sizeof(nonce_hex_dbg));
+	format_hex16(nonce, nonce_hex_dbg, sizeof(nonce_hex_dbg));
+	printk("Link nonce used (keyfob): %s\n", nonce_hex_dbg);
 
 	char mac_hex[65];
 	memset(mac_hex, 0, sizeof(mac_hex));
@@ -376,6 +391,4 @@ void challenge_reset_preserve_expected(void)
 	memset(last_response, 0, sizeof(last_response));
 	challenge_notify_enabled = 0;
 	response_notify_enabled = 0;
-	memset(link_key, 0, sizeof(link_key));
-	link_key_set = false;
 }
