@@ -18,5 +18,7 @@ void challenge_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value);
 void challenge_force_notify_enable(void);
 void challenge_set_attr(const struct bt_gatt_attr *attr);
 void challenge_reset(void);
+void challenge_reset_preserve_expected(void);
+bool challenge_link_pending(void);
 int challenge_set_link_key_hex(const char *hex);
 void challenge_set_expected_keyfob_id(const char *id);

@@ -418,7 +418,14 @@ static void reset_session(void)
 {
 	memset(&session, 0, sizeof(session));
 	token_reset();
-	challenge_reset();
+	if (challenge_link_pending())
+	{
+		challenge_reset_preserve_expected();
+	}
+	else
+	{
+		challenge_reset();
+	}
 }
 
 static void connected(struct bt_conn *conn, uint8_t err)

@@ -370,6 +370,19 @@ void challenge_reset(void)
 	link_nonce_len = 0;
 }
 
+void challenge_reset_preserve_expected(void)
+{
+	memset(last_challenge, 0, sizeof(last_challenge));
+	challenge_notify_enabled = 0;
+	memset(link_nonce, 0, sizeof(link_nonce));
+	link_nonce_len = 0;
+}
+
+bool challenge_link_pending(void)
+{
+	return expected_keyfob_id[0] != '\0';
+}
+
 void challenge_set_expected_keyfob_id(const char *id)
 {
 	strncpy(expected_keyfob_id, id, sizeof(expected_keyfob_id));
