@@ -52,11 +52,13 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	/* Wait for CCC subscription before notifying. */
 
 	printk("Connected, requesting security level 2 (LESC)\n");
-
-	err = bt_conn_set_security(conn, BT_SECURITY_L2);
-	if (err)
+	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
 	{
-		printk("bt_conn_set_security failed (err %d)\n", err);
+		int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
+		if (sec_err)
+		{
+			printk("bt_conn_set_security failed (err %d)\n", sec_err);
+		}
 	}
 }
 
