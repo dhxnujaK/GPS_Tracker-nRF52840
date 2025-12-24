@@ -22,6 +22,7 @@ static uint16_t keyfob_response_handle;
 static uint16_t keyfob_response_ccc_handle;
 static uint16_t keyfob_svc_start;
 static uint16_t keyfob_svc_end;
+static bool keyfob_security_requested;
 static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 
@@ -90,6 +91,7 @@ static void keyfob_reset_discovery(void)
 	keyfob_response_ccc_handle = 0;
 	keyfob_svc_start = 0;
 	keyfob_svc_end = 0;
+	keyfob_security_requested = false;
 	memset(&discover_params, 0, sizeof(discover_params));
 	memset(&subscribe_params, 0, sizeof(subscribe_params));
 }
@@ -133,6 +135,20 @@ static void keyfob_send_nonce(void)
 	(void)bt_gatt_write_without_response(keyfob_conn, keyfob_challenge_handle,
 										 json, json_len, false);
 	printk("Keyfob nonce sent\n");
+
+	if (!keyfob_security_requested)
+	{
+		int sec_err = bt_conn_set_security(keyfob_conn, BT_SECURITY_L2);
+		if (sec_err)
+		{
+			printk("Keyfob security request failed (err %d)\n", sec_err);
+		}
+		else
+		{
+			printk("Keyfob security request started\n");
+		}
+		keyfob_security_requested = true;
+	}
 }
 
 static uint8_t keyfob_discover_cb(struct bt_conn *conn,
@@ -323,10 +339,6 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	{
 		printk("Keyfob connected\n");
 		keyfob_conn = bt_conn_ref(conn);
-		if (bt_conn_set_security(conn, BT_SECURITY_L2))
-		{
-			printk("Keyfob security request failed\n");
-		}
 		keyfob_start_discovery(conn);
 		return;
 	}
