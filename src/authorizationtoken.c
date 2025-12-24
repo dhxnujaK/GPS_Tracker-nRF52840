@@ -105,6 +105,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	static char payload_json[768];
 	char immob_id[80];
 	char keyfob_id[80];
+	char link_key_hex[80];
 	size_t payload_len = 0;
 	size_t sig_len = 0;
 
@@ -157,6 +158,13 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 	if (has_keyfob_id)
 	{
 		challenge_set_expected_keyfob_id(keyfob_id);
+		bool has_link_key = json_extract_string(payload_json, "linkKeyHex",
+												link_key_hex, sizeof(link_key_hex));
+		if (!has_link_key || challenge_set_link_key_hex(link_key_hex))
+		{
+			publish_token_result(conn, attr, "ERROR");
+			return len;
+		}
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))

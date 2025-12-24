@@ -19,6 +19,8 @@ static uint8_t challenge_notify_enabled;
 static char last_challenge[160];
 static char linked_keyfob_id[80];
 static char expected_keyfob_id[80];
+static uint8_t link_key[32];
+static bool link_key_set;
 
 static int settings_set(const char *name, size_t len,
 						settings_read_cb read_cb, void *cb_arg)
@@ -66,6 +68,22 @@ static int compute_hmac_sha256(const uint8_t *key, size_t key_len,
 	}
 
 	memcpy(out_mac, mac, sizeof(mac));
+	return 0;
+}
+
+int challenge_set_link_key_hex(const char *hex)
+{
+	if (!hex || !hex[0])
+	{
+		return -EINVAL;
+	}
+
+	if (!hex_to_bytes(hex, link_key, sizeof(link_key)))
+	{
+		return -EINVAL;
+	}
+
+	link_key_set = true;
 	return 0;
 }
 
@@ -179,7 +197,15 @@ static int verify_response_json(struct bt_conn *notify_conn, const char *json)
 		return -EACCES;
 	}
 
-	if (compute_hmac_sha256(device_secret, sizeof(device_secret),
+	const uint8_t *key = device_secret;
+	size_t key_len = sizeof(device_secret);
+	if (expected_keyfob_id[0] && link_key_set)
+	{
+		key = link_key;
+		key_len = sizeof(link_key);
+	}
+
+	if (compute_hmac_sha256(key, key_len,
 							session.nonce, session.nonce_len,
 							expected_mac, sizeof(expected_mac)))
 	{
@@ -285,6 +311,8 @@ void challenge_reset(void)
 	memset(last_challenge, 0, sizeof(last_challenge));
 	challenge_notify_enabled = 0;
 	memset(expected_keyfob_id, 0, sizeof(expected_keyfob_id));
+	memset(link_key, 0, sizeof(link_key));
+	link_key_set = false;
 }
 
 void challenge_set_expected_keyfob_id(const char *id)
