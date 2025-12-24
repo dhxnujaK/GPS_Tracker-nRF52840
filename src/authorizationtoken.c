@@ -165,6 +165,7 @@ static ssize_t process_token_json(struct bt_conn *conn, const struct bt_gatt_att
 			publish_token_result(conn, attr, "ERROR");
 			return len;
 		}
+		printk("Link key received: %s\n", link_key_hex);
 	}
 
 	if (verify_signature_es256((uint8_t *)payload_buf, payload_len, sig_buf, sig_len))

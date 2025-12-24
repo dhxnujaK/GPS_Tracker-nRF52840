@@ -21,6 +21,8 @@ static char linked_keyfob_id[80];
 static char expected_keyfob_id[80];
 static uint8_t link_key[32];
 static bool link_key_set;
+static uint8_t link_nonce[16];
+static size_t link_nonce_len;
 
 static int settings_set(const char *name, size_t len,
 						settings_read_cb read_cb, void *cb_arg)
@@ -69,6 +71,29 @@ static int compute_hmac_sha256(const uint8_t *key, size_t key_len,
 
 	memcpy(out_mac, mac, sizeof(mac));
 	return 0;
+}
+
+static void format_hex(const uint8_t *in, size_t len, char *out, size_t out_len)
+{
+	if (out_len < (len * 2 + 1))
+	{
+		return;
+	}
+
+	for (size_t i = 0; i < len; i++)
+	{
+		snprintf(&out[i * 2], 3, "%02x", in[i]);
+	}
+}
+
+static void format_hex32(const uint8_t *in, char *out, size_t out_len)
+{
+	format_hex(in, 32, out, out_len);
+}
+
+static void format_hex16(const uint8_t *in, char *out, size_t out_len)
+{
+	format_hex(in, 16, out, out_len);
 }
 
 int challenge_set_link_key_hex(const char *hex)
@@ -144,6 +169,11 @@ int challenge_send_nonce(struct bt_conn *conn)
 	memcpy(session.nonce, nonce, sizeof(nonce));
 	session.nonce_len = sizeof(nonce);
 	session.challenge_sent = true;
+	if (expected_keyfob_id[0])
+	{
+		memcpy(link_nonce, nonce, sizeof(nonce));
+		link_nonce_len = sizeof(nonce);
+	}
 
 	char nonce_hex[16 * 2 + 1];
 	for (size_t i = 0; i < sizeof(nonce); i++)
@@ -205,12 +235,35 @@ static int verify_response_json(struct bt_conn *notify_conn, const char *json)
 		key_len = sizeof(link_key);
 	}
 
+	const uint8_t *msg = session.nonce;
+	size_t msg_len = session.nonce_len;
+	if (expected_keyfob_id[0] && link_nonce_len == sizeof(link_nonce))
+	{
+		msg = link_nonce;
+		msg_len = link_nonce_len;
+	}
+
 	if (compute_hmac_sha256(key, key_len,
-							session.nonce, session.nonce_len,
+							msg, msg_len,
 							expected_mac, sizeof(expected_mac)))
 	{
 		return -EINVAL;
 	}
+
+	char mac_hex_dbg[65];
+	memset(mac_hex_dbg, 0, sizeof(mac_hex_dbg));
+	format_hex32(expected_mac, mac_hex_dbg, sizeof(mac_hex_dbg));
+	printk("Link HMAC expected (immo): %s\n", mac_hex_dbg);
+
+	char key_hex_dbg[65];
+	memset(key_hex_dbg, 0, sizeof(key_hex_dbg));
+	format_hex32(key, key_hex_dbg, sizeof(key_hex_dbg));
+	printk("Link key used (immo): %s\n", key_hex_dbg);
+
+	char nonce_hex_dbg[33];
+	memset(nonce_hex_dbg, 0, sizeof(nonce_hex_dbg));
+	format_hex16(msg, nonce_hex_dbg, sizeof(nonce_hex_dbg));
+	printk("Link nonce used (immo): %s\n", nonce_hex_dbg);
 
 	if (memcmp(mac_bytes, expected_mac, sizeof(expected_mac)) == 0)
 	{
@@ -313,6 +366,8 @@ void challenge_reset(void)
 	memset(expected_keyfob_id, 0, sizeof(expected_keyfob_id));
 	memset(link_key, 0, sizeof(link_key));
 	link_key_set = false;
+	memset(link_nonce, 0, sizeof(link_nonce));
+	link_nonce_len = 0;
 }
 
 void challenge_set_expected_keyfob_id(const char *id)
