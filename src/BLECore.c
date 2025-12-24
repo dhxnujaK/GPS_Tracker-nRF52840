@@ -23,8 +23,11 @@ static uint16_t keyfob_response_ccc_handle;
 static uint16_t keyfob_svc_start;
 static uint16_t keyfob_svc_end;
 static bool keyfob_security_requested;
+static struct k_work_delayable keyfob_nonce_work;
+static uint8_t keyfob_nonce_retries;
 static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
+static struct bt_gatt_exchange_params keyfob_mtu_params;
 
 #define BT_UUID_COMM_SVC_VAL \
 	BT_UUID_128_ENCODE(0x23d7f4a1, 0x8c5e, 0x4af2, 0x91b7, 0x77c3f5a0c101)
@@ -92,9 +95,13 @@ static void keyfob_reset_discovery(void)
 	keyfob_svc_start = 0;
 	keyfob_svc_end = 0;
 	keyfob_security_requested = false;
+	keyfob_nonce_retries = 0;
+	(void)k_work_cancel_delayable(&keyfob_nonce_work);
 	memset(&discover_params, 0, sizeof(discover_params));
 	memset(&subscribe_params, 0, sizeof(subscribe_params));
 }
+
+static void keyfob_start_discovery(struct bt_conn *conn);
 
 static uint8_t keyfob_notify_cb(struct bt_conn *conn,
 								struct bt_gatt_subscribe_params *params,
@@ -119,21 +126,34 @@ static void keyfob_send_nonce(void)
 		return;
 	}
 
-	if (challenge_send_nonce(current_conn))
-	{
-		return;
-	}
-
 	const char *json = NULL;
 	size_t json_len = 0;
 	challenge_get_last_json(&json, &json_len);
+	if (!session.challenge_sent || !json || json_len == 0)
+	{
+		if (challenge_send_nonce(current_conn))
+		{
+			return;
+		}
+		challenge_get_last_json(&json, &json_len);
+	}
 	if (!json || json_len == 0)
 	{
 		return;
 	}
 
-	(void)bt_gatt_write_without_response(keyfob_conn, keyfob_challenge_handle,
-										 json, json_len, false);
+	int werr = bt_gatt_write_without_response(keyfob_conn, keyfob_challenge_handle,
+											  json, json_len, false);
+	if (werr)
+	{
+		printk("Keyfob nonce write failed (err %d)\n", werr);
+		if ((werr == -ENOMEM || werr == -EAGAIN) && keyfob_nonce_retries < 10)
+		{
+			keyfob_nonce_retries++;
+			(void)k_work_schedule(&keyfob_nonce_work, K_MSEC(500));
+		}
+		return;
+	}
 	printk("Keyfob nonce sent\n");
 
 	if (!keyfob_security_requested)
@@ -151,6 +171,27 @@ static void keyfob_send_nonce(void)
 	}
 }
 
+static void keyfob_nonce_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	keyfob_send_nonce();
+}
+
+static void keyfob_mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
+								   struct bt_gatt_exchange_params *params)
+{
+	ARG_UNUSED(params);
+	if (err)
+	{
+		printk("Keyfob MTU exchange failed (err %u)\n", err);
+	}
+	else
+	{
+		printk("Keyfob MTU exchange complete\n");
+	}
+	keyfob_start_discovery(conn);
+}
+
 static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 								  const struct bt_gatt_attr *attr,
 								  struct bt_gatt_discover_params *params)
@@ -160,11 +201,39 @@ static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 		if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC &&
 			keyfob_response_handle && keyfob_svc_end)
 		{
+			printk("Keyfob service discovered, searching CCC\n");
 			discover_params.uuid = BT_UUID_GATT_CCC;
 			discover_params.start_handle = keyfob_response_handle + 1;
 			discover_params.end_handle = keyfob_svc_end;
 			discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
-			bt_gatt_discover(conn, &discover_params);
+			int derr = bt_gatt_discover(conn, &discover_params);
+			if (derr)
+			{
+				printk("Keyfob CCC discover failed (err %d)\n", derr);
+			}
+		}
+		else if (params->type == BT_GATT_DISCOVER_DESCRIPTOR)
+		{
+			printk("Keyfob CCC not found in range\n");
+			if (keyfob_response_handle && keyfob_svc_end &&
+				keyfob_response_handle + 1 <= keyfob_svc_end)
+			{
+				keyfob_response_ccc_handle = keyfob_response_handle + 1;
+				subscribe_params.notify = keyfob_notify_cb;
+				subscribe_params.value = BT_GATT_CCC_NOTIFY;
+				subscribe_params.value_handle = keyfob_response_handle;
+				subscribe_params.ccc_handle = keyfob_response_ccc_handle;
+				int serr = bt_gatt_subscribe(conn, &subscribe_params);
+				if (serr)
+				{
+					printk("Keyfob subscribe fallback failed (err %d)\n", serr);
+				}
+				else
+				{
+					printk("Keyfob response subscribed (fallback)\n");
+				}
+				(void)k_work_schedule(&keyfob_nonce_work, K_MSEC(1000));
+			}
 		}
 		return BT_GATT_ITER_STOP;
 	}
@@ -174,12 +243,17 @@ static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 		const struct bt_gatt_service_val *svc = attr->user_data;
 		keyfob_svc_start = attr->handle + 1;
 		keyfob_svc_end = svc->end_handle;
+		printk("Keyfob service found handles [%u..%u]\n", keyfob_svc_start, keyfob_svc_end);
 
 		discover_params.uuid = NULL;
 		discover_params.start_handle = keyfob_svc_start;
 		discover_params.end_handle = keyfob_svc_end;
 		discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
-		bt_gatt_discover(conn, &discover_params);
+		int derr = bt_gatt_discover(conn, &discover_params);
+		if (derr)
+		{
+			printk("Keyfob char discover failed (err %d)\n", derr);
+		}
 		return BT_GATT_ITER_STOP;
 	}
 
@@ -189,25 +263,39 @@ static uint8_t keyfob_discover_cb(struct bt_conn *conn,
 		if (!bt_uuid_cmp(chrc->uuid, &keyfob_challenge_uuid.uuid))
 		{
 			keyfob_challenge_handle = chrc->value_handle;
+			printk("Keyfob challenge handle %u\n", keyfob_challenge_handle);
 		}
 		if (!bt_uuid_cmp(chrc->uuid, &keyfob_response_uuid.uuid))
 		{
 			keyfob_response_handle = chrc->value_handle;
+			printk("Keyfob response handle %u\n", keyfob_response_handle);
 		}
 		return BT_GATT_ITER_CONTINUE;
 	}
 
 	if (params->type == BT_GATT_DISCOVER_DESCRIPTOR)
 	{
+		if (!bt_uuid_cmp(attr->uuid, BT_UUID_GATT_CCC))
+		{
 		keyfob_response_ccc_handle = attr->handle;
+		printk("Keyfob response CCC handle %u\n", keyfob_response_ccc_handle);
 		subscribe_params.notify = keyfob_notify_cb;
 		subscribe_params.value = BT_GATT_CCC_NOTIFY;
 		subscribe_params.value_handle = keyfob_response_handle;
 		subscribe_params.ccc_handle = keyfob_response_ccc_handle;
-		bt_gatt_subscribe(conn, &subscribe_params);
-		printk("Keyfob response subscribed\n");
-		keyfob_send_nonce();
+		int serr = bt_gatt_subscribe(conn, &subscribe_params);
+		if (serr)
+		{
+			printk("Keyfob subscribe failed (err %d)\n", serr);
+		}
+		else
+		{
+			printk("Keyfob response subscribed\n");
+		}
+		(void)k_work_schedule(&keyfob_nonce_work, K_MSEC(1000));
 		return BT_GATT_ITER_STOP;
+	}
+		return BT_GATT_ITER_CONTINUE;
 	}
 
 	return BT_GATT_ITER_STOP;
@@ -222,7 +310,15 @@ static void keyfob_start_discovery(struct bt_conn *conn)
 	discover_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
 	discover_params.type = BT_GATT_DISCOVER_PRIMARY;
 	discover_params.func = keyfob_discover_cb;
-	bt_gatt_discover(conn, &discover_params);
+	int derr = bt_gatt_discover(conn, &discover_params);
+	if (derr)
+	{
+		printk("Keyfob discover start failed (err %d)\n", derr);
+	}
+	else
+	{
+		printk("Keyfob discover start\n");
+	}
 }
 
 static bool parse_uuid_ad(struct bt_data *data, void *user_data)
@@ -339,7 +435,13 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	{
 		printk("Keyfob connected\n");
 		keyfob_conn = bt_conn_ref(conn);
-		keyfob_start_discovery(conn);
+		keyfob_mtu_params.func = keyfob_mtu_exchange_cb;
+		int merr = bt_gatt_exchange_mtu(conn, &keyfob_mtu_params);
+		if (merr)
+		{
+			printk("Keyfob MTU exchange start failed (err %d)\n", merr);
+			keyfob_start_discovery(conn);
+		}
 		return;
 	}
 
@@ -530,6 +632,7 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	adv_ad_len = ad_len;
 	adv_sd_len = sd_len;
 	k_work_init_delayable(&secure_ready_work, secure_ready_work_handler);
+	k_work_init_delayable(&keyfob_nonce_work, keyfob_nonce_work_handler);
 
 	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
 	{
