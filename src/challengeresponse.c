@@ -193,11 +193,6 @@ ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	ARG_UNUSED(offset);
 	ARG_UNUSED(flags);
 
-	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
-	{
-		return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
-	}
-
 	if (!expected_immobiliser_id[0])
 	{
 		return len;
@@ -292,11 +287,6 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	ARG_UNUSED(attr);
 	ARG_UNUSED(offset);
 	ARG_UNUSED(flags);
-
-	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
-	{
-		return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
-	}
 
 	if (challenge_link_mode_active())
 	{

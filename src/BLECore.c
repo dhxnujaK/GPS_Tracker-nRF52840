@@ -59,6 +59,11 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	/* Wait for CCC subscription before notifying. */
 
 	printk("Connected, requesting security level 2 (LESC)\n");
+	if (challenge_link_mode_active())
+	{
+		printk("Link mode active, deferring security to central\n");
+		return;
+	}
 	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
 	{
 		int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
@@ -212,6 +217,9 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 		settings_load();
 		printk("Settings loaded\n");
 	}
+
+	/* Clear existing bonds to avoid stale keys during development */
+	(void)ble_clear_bonds();
 
 	err = ble_core_init();
 	if (err)
