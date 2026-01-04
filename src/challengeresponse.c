@@ -34,7 +34,6 @@ static int settings_set(const char *name, size_t len,
 		if (r > 0)
 		{
 			linked_immobiliser_id[r] = '\0';
-			challenge_set_expected_immobiliser_id(linked_immobiliser_id);
 		}
 		return 0;
 	}
@@ -287,11 +286,6 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	ARG_UNUSED(attr);
 	ARG_UNUSED(offset);
 	ARG_UNUSED(flags);
-
-	if (challenge_link_mode_active())
-	{
-		return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
-	}
 
 	char json[160];
 	if (len >= sizeof(json))
