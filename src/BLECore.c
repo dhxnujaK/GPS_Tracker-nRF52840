@@ -29,7 +29,8 @@ static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 static struct bt_gatt_exchange_params keyfob_mtu_params;
 static bool keyfob_bond_phase;
-static bool keyfob_pair_before_gatt;
+static bt_addr_le_t keyfob_last_addr;
+static struct k_work_delayable keyfob_bond_work;
 
 #define BT_UUID_COMM_SVC_VAL \
 	BT_UUID_128_ENCODE(0x23d7f4a1, 0x8c5e, 0x4af2, 0x91b7, 0x77c3f5a0c101)
@@ -99,6 +100,7 @@ static void keyfob_reset_discovery(void)
 	keyfob_security_requested = false;
 	keyfob_nonce_retries = 0;
 	(void)k_work_cancel_delayable(&keyfob_nonce_work);
+	(void)k_work_cancel_delayable(&keyfob_bond_work);
 	memset(&discover_params, 0, sizeof(discover_params));
 	memset(&subscribe_params, 0, sizeof(subscribe_params));
 }
@@ -177,6 +179,22 @@ static void keyfob_nonce_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
 	keyfob_send_nonce();
+}
+
+static void keyfob_bond_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (!keyfob_bond_phase)
+	{
+		return;
+	}
+	int err = bt_conn_le_create(&keyfob_last_addr, BT_CONN_LE_CREATE_CONN,
+								BT_LE_CONN_PARAM_DEFAULT, &keyfob_conn);
+	if (err)
+	{
+		printk("Keyfob bond phase reconnect failed (err %d)\n", err);
+		keyfob_bond_phase = false;
+	}
 }
 
 static void keyfob_mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
@@ -411,6 +429,7 @@ static void scan_recv_legacy(const bt_addr_le_t *addr, int8_t rssi,
 
 	bt_le_scan_stop();
 	keyfob_scanning = false;
+	bt_addr_le_copy(&keyfob_last_addr, addr);
 	printk("Keyfob advertisement matched, connecting\n");
 	bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
 					  BT_LE_CONN_PARAM_DEFAULT, &keyfob_conn);
@@ -444,17 +463,16 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	{
 		printk("Keyfob connected\n");
 		keyfob_conn = bt_conn_ref(conn);
-		if (!keyfob_pair_before_gatt)
+		if (keyfob_bond_phase)
 		{
-			keyfob_pair_before_gatt = true;
 			int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
 			if (sec_err)
 			{
-				printk("Keyfob pre-GATT security failed (err %d)\n", sec_err);
+				printk("Keyfob bond phase security failed (err %d)\n", sec_err);
 			}
 			else
 			{
-				printk("Keyfob pre-GATT security requested\n");
+				printk("Keyfob bond phase security requested\n");
 			}
 			return;
 		}
@@ -496,7 +514,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		}
 		keyfob_reset_discovery();
 		keyfob_scanning = false;
-		keyfob_pair_before_gatt = false;
 		if (adv_paused_for_scan)
 		{
 			adv_paused_for_scan = false;
@@ -504,6 +521,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 			{
 				printk("Advertising restarted\n");
 			}
+		}
+		if (keyfob_bond_phase)
+		{
+			(void)k_work_schedule(&keyfob_bond_work, K_MSEC(500));
 		}
 		return;
 	}
@@ -544,17 +565,6 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 				else
 				{
 					printk("Keyfob security level %u\n", level);
-					if (keyfob_pair_before_gatt)
-					{
-						keyfob_pair_before_gatt = false;
-						keyfob_mtu_params.func = keyfob_mtu_exchange_cb;
-						int merr = bt_gatt_exchange_mtu(conn, &keyfob_mtu_params);
-						if (merr)
-						{
-							printk("Keyfob MTU exchange start failed (err %d)\n", merr);
-							keyfob_start_discovery(conn);
-						}
-					}
 					if (keyfob_bond_phase)
 					{
 						printk("Keyfob bonded with L2\n");
@@ -673,6 +683,7 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 	adv_sd_len = sd_len;
 	k_work_init_delayable(&secure_ready_work, secure_ready_work_handler);
 	k_work_init_delayable(&keyfob_nonce_work, keyfob_nonce_work_handler);
+	k_work_init_delayable(&keyfob_bond_work, keyfob_bond_work_handler);
 
 	if (load_settings && IS_ENABLED(CONFIG_SETTINGS))
 	{
@@ -768,14 +779,6 @@ void ble_keyfob_bond_phase_start(void)
 	keyfob_bond_phase = true;
 	if (keyfob_conn)
 	{
-		int sec_err = bt_conn_set_security(keyfob_conn, BT_SECURITY_L2);
-		if (sec_err)
-		{
-			printk("Keyfob bond phase security failed (err %d)\n", sec_err);
-		}
-		else
-		{
-			printk("Keyfob bond phase security requested\n");
-		}
+		(void)bt_conn_disconnect(keyfob_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	}
 }
