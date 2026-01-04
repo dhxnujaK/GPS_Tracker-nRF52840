@@ -8,7 +8,6 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <dk_buttons_and_leds.h>
 
 #include "app_config.h"
 #include "authorizationtoken.h"
@@ -44,15 +43,6 @@ static const struct bt_data sd[] = {
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 	BT_DATA(BT_DATA_MANUFACTURER_DATA, mfg_data, sizeof(mfg_data)),
 };
-
-static void button_handler(uint32_t button_state, uint32_t has_changed)
-{
-	if ((has_changed & DK_BTN1_MSK) && (button_state & DK_BTN1_MSK))
-	{
-		printk("Button 1 pressed, clearing bonds\n");
-		(void)ble_clear_bonds();
-	}
-}
 
 /* GATT database */
 BT_GATT_SERVICE_DEFINE(comm_svc,
@@ -117,12 +107,6 @@ static int app_init(void)
 	if (err)
 	{
 		return 0;
-	}
-
-	err = dk_buttons_init(button_handler);
-	if (err)
-	{
-		printk("Buttons init failed (err %d)\n", err);
 	}
 
 	return 0;

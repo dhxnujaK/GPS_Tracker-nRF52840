@@ -22,6 +22,7 @@ static uint16_t keyfob_response_handle;
 static uint16_t keyfob_response_ccc_handle;
 static uint16_t keyfob_svc_start;
 static uint16_t keyfob_svc_end;
+static bool keyfob_security_requested;
 static struct k_work_delayable keyfob_nonce_work;
 static uint8_t keyfob_nonce_retries;
 static struct bt_gatt_discover_params discover_params;
@@ -95,6 +96,7 @@ static void keyfob_reset_discovery(void)
 	keyfob_response_ccc_handle = 0;
 	keyfob_svc_start = 0;
 	keyfob_svc_end = 0;
+	keyfob_security_requested = false;
 	keyfob_nonce_retries = 0;
 	(void)k_work_cancel_delayable(&keyfob_nonce_work);
 	memset(&discover_params, 0, sizeof(discover_params));
@@ -123,12 +125,6 @@ static void keyfob_send_nonce(void)
 {
 	if (!keyfob_conn || keyfob_challenge_handle == 0)
 	{
-		return;
-	}
-
-	if (bt_conn_get_security(keyfob_conn) < BT_SECURITY_L2)
-	{
-		printk("Keyfob link not secure yet, deferring nonce\n");
 		return;
 	}
 
@@ -162,6 +158,19 @@ static void keyfob_send_nonce(void)
 	}
 	printk("Keyfob nonce sent\n");
 
+	if (!keyfob_security_requested)
+	{
+		int sec_err = bt_conn_set_security(keyfob_conn, BT_SECURITY_L2);
+		if (sec_err)
+		{
+			printk("Keyfob security request failed (err %d)\n", sec_err);
+		}
+		else
+		{
+			printk("Keyfob security request started\n");
+		}
+		keyfob_security_requested = true;
+	}
 }
 
 static void keyfob_nonce_work_handler(struct k_work *work)
@@ -670,6 +679,9 @@ int ble_core_start(const struct bt_data *ad, size_t ad_len,
 		settings_load();
 		printk("Settings loaded\n");
 	}
+
+	/* Clear existing bonds to avoid stale keys during development */
+	(void)ble_clear_bonds();
 
 	err = ble_core_init();
 	if (err)
