@@ -34,6 +34,8 @@ static int settings_set(const char *name, size_t len,
 		if (r > 0)
 		{
 			linked_keyfob_id[r] = '\0';
+			challenge_set_expected_keyfob_id(linked_keyfob_id);
+			(void)ble_link_keyfob_start(linked_keyfob_id);
 		}
 		return 0;
 	}
