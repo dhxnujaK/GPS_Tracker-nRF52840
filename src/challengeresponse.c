@@ -8,6 +8,7 @@
 #include <string.h>
 #include <zephyr/random/random.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/base64.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
 #include <mbedtls/md.h>
@@ -193,6 +194,39 @@ static void format_hex16(const uint8_t *in, char *out, size_t out_len)
 	format_hex(in, 16, out, out_len);
 }
 
+static void response_notify_chunked(struct bt_conn *conn)
+{
+	if (!response_attr || response_notify_enabled != BT_GATT_CCC_NOTIFY || !conn)
+	{
+		return;
+	}
+
+	size_t total = strlen(last_response);
+	char header[64];
+	snprintk(header, sizeof(header), "{\"type\":\"FRAG_HDR\",\"len\":%u}", (unsigned)total);
+	notify_json(conn, response_attr, header, response_notify_enabled);
+
+	const size_t chunk_size = 18;
+	unsigned int seq = 0;
+	for (size_t offset = 0; offset < total; offset += chunk_size, seq++)
+	{
+		size_t chunk_len = MIN(chunk_size, total - offset);
+		char b64[64];
+		size_t b64_len = 0;
+		if (base64_encode((uint8_t *)b64, sizeof(b64) - 1, &b64_len,
+						  (const uint8_t *)&last_response[offset], chunk_len))
+		{
+			return;
+		}
+		b64[b64_len] = '\0';
+
+		char frag[96];
+		snprintk(frag, sizeof(frag),
+				 "{\"type\":\"FRAG\",\"seq\":%u,\"data\":\"%s\"}", seq, b64);
+		notify_json(conn, response_attr, frag, response_notify_enabled);
+	}
+}
+
 ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 						const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -266,7 +300,7 @@ ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 
 	if (response_attr)
 	{
-		notify_json(conn, response_attr, last_response, response_notify_enabled);
+		response_notify_chunked(conn);
 	}
 
 	if (expected_immobiliser_id[0])
