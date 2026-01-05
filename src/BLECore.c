@@ -1,4 +1,5 @@
 #include "BLECore.h"
+#include "app_utils.h"
 #include "authorizationtoken.h"
 #include "challengeresponse.h"
 
@@ -31,6 +32,14 @@ static struct bt_gatt_exchange_params keyfob_mtu_params;
 static bool keyfob_bond_phase;
 static bt_addr_le_t keyfob_last_addr;
 static struct k_work_delayable keyfob_bond_work;
+struct frag_state
+{
+	size_t expected_len;
+	size_t buf_len;
+};
+static uint8_t keyfob_resp_buf[256];
+static char keyfob_cmd_buf[128];
+static struct frag_state keyfob_resp_frag;
 
 #define BT_UUID_COMM_SVC_VAL \
 	BT_UUID_128_ENCODE(0x23d7f4a1, 0x8c5e, 0x4af2, 0x91b7, 0x77c3f5a0c101)
@@ -103,6 +112,7 @@ static void keyfob_reset_discovery(void)
 	(void)k_work_cancel_delayable(&keyfob_bond_work);
 	memset(&discover_params, 0, sizeof(discover_params));
 	memset(&subscribe_params, 0, sizeof(subscribe_params));
+	memset(&keyfob_resp_frag, 0, sizeof(keyfob_resp_frag));
 }
 
 static void keyfob_start_discovery(struct bt_conn *conn);
@@ -119,6 +129,68 @@ static uint8_t keyfob_notify_cb(struct bt_conn *conn,
 	}
 
 	printk("Keyfob response notify received (%u bytes)\n", length);
+	if (length >= sizeof(keyfob_resp_buf))
+	{
+		return BT_GATT_ITER_CONTINUE;
+	}
+
+	char type[16];
+	if (length < sizeof(keyfob_cmd_buf))
+	{
+		memcpy(keyfob_cmd_buf, data, length);
+		keyfob_cmd_buf[length] = '\0';
+		if (json_extract_string(keyfob_cmd_buf, "type", type, sizeof(type)))
+		{
+			if (strcmp(type, "FRAG_HDR") == 0)
+			{
+				uint32_t total_len = 0;
+				if (!json_extract_uint(keyfob_cmd_buf, "len", &total_len))
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				if (total_len == 0 || total_len > sizeof(keyfob_resp_buf))
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				memset(&keyfob_resp_frag, 0, sizeof(keyfob_resp_frag));
+				keyfob_resp_frag.expected_len = total_len;
+				keyfob_resp_frag.buf_len = 0;
+				return BT_GATT_ITER_CONTINUE;
+			}
+			else if (strcmp(type, "FRAG") == 0)
+			{
+				char data_b64[128];
+				if (!json_extract_string(keyfob_cmd_buf, "data", data_b64, sizeof(data_b64)))
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				if (keyfob_resp_frag.expected_len == 0)
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				uint8_t chunk[128];
+				size_t chunk_len = 0;
+				if (base64_decode_str(data_b64, chunk, sizeof(chunk), &chunk_len))
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				if (keyfob_resp_frag.buf_len + chunk_len > sizeof(keyfob_resp_buf))
+				{
+					return BT_GATT_ITER_CONTINUE;
+				}
+				memcpy(keyfob_resp_buf + keyfob_resp_frag.buf_len, chunk, chunk_len);
+				keyfob_resp_frag.buf_len += chunk_len;
+				if (keyfob_resp_frag.buf_len >= keyfob_resp_frag.expected_len)
+				{
+					size_t total = keyfob_resp_frag.buf_len;
+					memset(&keyfob_resp_frag, 0, sizeof(keyfob_resp_frag));
+					(void)challenge_process_response_json(current_conn, keyfob_resp_buf, total);
+				}
+				return BT_GATT_ITER_CONTINUE;
+			}
+		}
+	}
+
 	(void)challenge_process_response_json(current_conn, data, length);
 	return BT_GATT_ITER_CONTINUE;
 }
