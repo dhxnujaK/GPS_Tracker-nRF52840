@@ -23,6 +23,14 @@ static uint8_t link_key[32];
 static bool link_key_set;
 static uint8_t link_nonce[16];
 static size_t link_nonce_len;
+struct frag_state
+{
+	size_t expected_len;
+	size_t buf_len;
+};
+static uint8_t response_buf[256];
+static char response_cmd_buf[128];
+static struct frag_state response_frag;
 
 static int settings_set(const char *name, size_t len,
 						settings_read_cb read_cb, void *cb_arg)
@@ -340,15 +348,77 @@ ssize_t response_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	ARG_UNUSED(offset);
 	ARG_UNUSED(flags);
 
-	if (len >= 160)
+	if (len >= sizeof(response_buf))
 	{
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
-	char json[160];
-	memcpy(json, buf, len);
-	json[len] = '\0';
-	(void)verify_response_json(conn, json);
+	char type[16];
+	if (len < sizeof(response_cmd_buf))
+	{
+		memcpy(response_cmd_buf, buf, len);
+		response_cmd_buf[len] = '\0';
+		if (json_extract_string(response_cmd_buf, "type", type, sizeof(type)))
+		{
+			if (strcmp(type, "FRAG_HDR") == 0)
+			{
+				uint32_t total_len = 0;
+				if (!json_extract_uint(response_cmd_buf, "len", &total_len))
+				{
+					return len;
+				}
+				if (total_len == 0 || total_len >= sizeof(response_buf))
+				{
+					return len;
+				}
+				memset(&response_frag, 0, sizeof(response_frag));
+				response_frag.expected_len = total_len;
+				response_frag.buf_len = 0;
+				return len;
+			}
+			else if (strcmp(type, "FRAG") == 0)
+			{
+				char data_b64[128];
+				if (!json_extract_string(response_cmd_buf, "data", data_b64, sizeof(data_b64)))
+				{
+					return len;
+				}
+				if (response_frag.expected_len == 0)
+				{
+					return len;
+				}
+				uint8_t chunk[128];
+				size_t chunk_len = 0;
+				if (base64_decode_str(data_b64, chunk, sizeof(chunk), &chunk_len))
+				{
+					return len;
+				}
+				if (response_frag.buf_len + chunk_len >= sizeof(response_buf))
+				{
+					return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+				}
+				memcpy(response_buf + response_frag.buf_len, chunk, chunk_len);
+				response_frag.buf_len += chunk_len;
+
+				if (response_frag.buf_len >= response_frag.expected_len)
+				{
+					size_t total = response_frag.buf_len;
+					if (total >= sizeof(response_buf))
+					{
+						return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+					}
+					response_buf[total] = '\0';
+					memset(&response_frag, 0, sizeof(response_frag));
+					(void)verify_response_json(conn, (char *)response_buf);
+				}
+				return len;
+			}
+		}
+	}
+
+	memcpy(response_buf, buf, len);
+	response_buf[len] = '\0';
+	(void)verify_response_json(conn, (char *)response_buf);
 	return len;
 }
 
@@ -372,6 +442,7 @@ void challenge_reset(void)
 	link_key_set = false;
 	memset(link_nonce, 0, sizeof(link_nonce));
 	link_nonce_len = 0;
+	memset(&response_frag, 0, sizeof(response_frag));
 }
 
 void challenge_reset_preserve_expected(void)
@@ -380,6 +451,7 @@ void challenge_reset_preserve_expected(void)
 	challenge_notify_enabled = 0;
 	memset(link_nonce, 0, sizeof(link_nonce));
 	link_nonce_len = 0;
+	memset(&response_frag, 0, sizeof(response_frag));
 }
 
 bool challenge_link_pending(void)

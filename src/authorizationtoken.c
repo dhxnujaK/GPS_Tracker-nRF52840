@@ -24,6 +24,7 @@ static bool secure_ready_pending;
 
 static uint8_t token_buf[1024];
 static size_t token_buf_len;
+static char token_cmd_buf[256];
 
 struct frag_state
 {
@@ -227,8 +228,7 @@ ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 					const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
 	ARG_UNUSED(attr);
-
-	char json[1024];
+	char *json = (char *)token_buf;
 
 	if (bt_conn_get_security(conn) < BT_SECURITY_L2)
 	{
@@ -252,12 +252,11 @@ ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	{
 		/* Execute long write */
 		len = token_buf_len;
-		if (len == 0 || len >= sizeof(json))
+		if (len == 0 || len >= sizeof(token_buf))
 		{
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
-		memcpy(json, token_buf, len);
-		json[len] = '\0';
+		token_buf[len] = '\0';
 		token_buf_len = 0;
 	}
 	else
@@ -267,75 +266,87 @@ ssize_t token_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 		}
 
-		if (len >= sizeof(json))
+		if (len >= sizeof(token_buf))
 		{
 			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
-		memcpy(json, buf, len);
-		json[len] = '\0';
-		token_buf_len = 0;
 	}
 
 	/* Fragmented send from app: FRAG_HDR / FRAG */
 	char type[16];
-	if (json_extract_string(json, "type", type, sizeof(type)))
+	if (!(flags & BT_GATT_WRITE_FLAG_EXECUTE))
 	{
-		if (strcmp(type, "FRAG_HDR") == 0)
+		if (len >= sizeof(token_cmd_buf))
 		{
-			uint32_t total_len = 0;
-			if (!json_extract_uint(json, "len", &total_len))
-			{
-				return len;
-			}
-			if (total_len == 0 || total_len > sizeof(token_buf))
-			{
-				return len;
-			}
-			memset(&token_frag, 0, sizeof(token_frag));
-			token_frag.expected_len = total_len;
-			token_frag.buf_len = 0;
-			token_buf_len = 0;
-			return len;
+			return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 		}
-		else if (strcmp(type, "FRAG") == 0)
+		memcpy(token_cmd_buf, buf, len);
+		token_cmd_buf[len] = '\0';
+		if (json_extract_string(token_cmd_buf, "type", type, sizeof(type)))
 		{
-			char data_b64[256];
-			if (!json_extract_string(json, "data", data_b64, sizeof(data_b64)))
+			if (strcmp(type, "FRAG_HDR") == 0)
 			{
+				uint32_t total_len = 0;
+				if (!json_extract_uint(token_cmd_buf, "len", &total_len))
+				{
+					return len;
+				}
+				if (total_len == 0 || total_len > sizeof(token_buf))
+				{
+					return len;
+				}
+				memset(&token_frag, 0, sizeof(token_frag));
+				token_frag.expected_len = total_len;
+				token_frag.buf_len = 0;
+				token_buf_len = 0;
 				return len;
 			}
-			if (token_frag.expected_len == 0)
+			else if (strcmp(type, "FRAG") == 0)
 			{
-				return len;
-			}
-			uint8_t chunk[256];
-			size_t chunk_len = 0;
-			if (base64_decode_str(data_b64, chunk, sizeof(chunk), &chunk_len))
-			{
-				return len;
-			}
-			if (token_frag.buf_len + chunk_len > sizeof(token_buf))
-			{
-				return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-			}
-			memcpy(token_buf + token_frag.buf_len, chunk, chunk_len);
-			token_frag.buf_len += chunk_len;
-
-			if (token_frag.buf_len >= token_frag.expected_len)
-			{
-				size_t total = token_frag.buf_len;
-				if (total >= sizeof(json))
+				char data_b64[256];
+				if (!json_extract_string(token_cmd_buf, "data", data_b64, sizeof(data_b64)))
+				{
+					return len;
+				}
+				if (token_frag.expected_len == 0)
+				{
+					return len;
+				}
+				uint8_t chunk[256];
+				size_t chunk_len = 0;
+				if (base64_decode_str(data_b64, chunk, sizeof(chunk), &chunk_len))
+				{
+					return len;
+				}
+				if (token_frag.buf_len + chunk_len > sizeof(token_buf))
 				{
 					return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 				}
-				memcpy(json, token_buf, total);
-				json[total] = '\0';
-				memset(&token_frag, 0, sizeof(token_frag));
-				token_buf_len = 0;
-				return process_token_json(conn, attr, json, total);
+				memcpy(token_buf + token_frag.buf_len, chunk, chunk_len);
+				token_frag.buf_len += chunk_len;
+
+				if (token_frag.buf_len >= token_frag.expected_len)
+				{
+					size_t total = token_frag.buf_len;
+					if (total >= sizeof(token_buf))
+					{
+						return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+					}
+					token_buf[total] = '\0';
+					memset(&token_frag, 0, sizeof(token_frag));
+					token_buf_len = 0;
+					return process_token_json(conn, attr, (char *)token_buf, total);
+				}
+				return len;
 			}
-			return len;
 		}
+	}
+
+	if (!(flags & BT_GATT_WRITE_FLAG_EXECUTE))
+	{
+		memcpy(token_buf, buf, len);
+		token_buf[len] = '\0';
+		token_buf_len = 0;
 	}
 
 	/* Non-fragmented path: process directly */
