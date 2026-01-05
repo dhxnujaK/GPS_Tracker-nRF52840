@@ -122,6 +122,11 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn,
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+	if (challenge_link_mode_active())
+	{
+		printk("Rejecting pairing during link mode from %s\n", addr);
+		return BT_SECURITY_ERR_PAIR_NOT_SUPPORTED;
+	}
 	printk("Pairing accept from %s io_cap=%u oob=%u auth_req=0x%02x key_size=%u\n",
 		   addr, feat->io_capability, feat->oob_data_flag, feat->auth_req,
 		   feat->max_enc_key_size);

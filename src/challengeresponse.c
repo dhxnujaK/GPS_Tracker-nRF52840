@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <zephyr/kernel.h>
 #include <zephyr/random/random.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/base64.h>
@@ -32,6 +33,9 @@ struct frag_state
 static uint8_t response_buf[256];
 static char response_cmd_buf[128];
 static struct frag_state response_frag;
+static struct k_work_delayable link_disconnect_work;
+static struct bt_conn *link_disconnect_conn;
+static void link_disconnect_work_handler(struct k_work *work);
 
 static int settings_set(const char *name, size_t len,
 						settings_read_cb read_cb, void *cb_arg)
@@ -158,6 +162,7 @@ int challenge_send_nonce(struct bt_conn *conn)
 void response_set_attr(const struct bt_gatt_attr *attr)
 {
 	response_attr = attr;
+	k_work_init_delayable(&link_disconnect_work, link_disconnect_work_handler);
 }
 
 void challenge_set_expected_immobiliser_id(const char *id)
@@ -225,6 +230,31 @@ static void response_notify_chunked(struct bt_conn *conn)
 				 "{\"type\":\"FRAG\",\"seq\":%u,\"data\":\"%s\"}", seq, b64);
 		notify_json(conn, response_attr, frag, response_notify_enabled);
 	}
+}
+
+static void link_disconnect_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	if (link_disconnect_conn)
+	{
+		(void)bt_conn_disconnect(link_disconnect_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		bt_conn_unref(link_disconnect_conn);
+		link_disconnect_conn = NULL;
+	}
+}
+
+static void link_disconnect_schedule(struct bt_conn *conn)
+{
+	if (!conn)
+	{
+		return;
+	}
+	if (link_disconnect_conn)
+	{
+		bt_conn_unref(link_disconnect_conn);
+	}
+	link_disconnect_conn = bt_conn_ref(conn);
+	(void)k_work_schedule(&link_disconnect_work, K_MSEC(300));
 }
 
 ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -312,6 +342,7 @@ ssize_t challenge_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 
 	session.trusted = true;
 	printk("Link response sent to immobiliser %s\n", expected_immobiliser_id);
+	link_disconnect_schedule(conn);
 	return len;
 }
 
@@ -493,6 +524,12 @@ void challenge_reset(void)
 	memset(link_key, 0, sizeof(link_key));
 	link_key_set = false;
 	memset(&response_frag, 0, sizeof(response_frag));
+	(void)k_work_cancel_delayable(&link_disconnect_work);
+	if (link_disconnect_conn)
+	{
+		bt_conn_unref(link_disconnect_conn);
+		link_disconnect_conn = NULL;
+	}
 }
 
 void challenge_reset_preserve_expected(void)
@@ -502,4 +539,10 @@ void challenge_reset_preserve_expected(void)
 	challenge_notify_enabled = 0;
 	response_notify_enabled = 0;
 	memset(&response_frag, 0, sizeof(response_frag));
+	(void)k_work_cancel_delayable(&link_disconnect_work);
+	if (link_disconnect_conn)
+	{
+		bt_conn_unref(link_disconnect_conn);
+		link_disconnect_conn = NULL;
+	}
 }
