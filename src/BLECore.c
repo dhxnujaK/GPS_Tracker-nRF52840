@@ -232,7 +232,7 @@ static void keyfob_send_nonce(void)
 	}
 	printk("Keyfob nonce sent\n");
 
-	if (!keyfob_security_requested)
+	if (keyfob_bond_phase && !keyfob_security_requested)
 	{
 		int sec_err = bt_conn_set_security(keyfob_conn, BT_SECURITY_L2);
 		if (sec_err)

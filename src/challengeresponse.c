@@ -295,10 +295,6 @@ static int verify_response_json(struct bt_conn *notify_conn, const char *json)
 			}
 		}
 		printk("Challenge response validated\n");
-		if (expected_keyfob_id[0] && has_keyfob_id)
-		{
-			ble_keyfob_bond_phase_start();
-		}
 		return 0;
 	}
 	else
